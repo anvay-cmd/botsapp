@@ -1,0 +1,95 @@
+# ===== Flutter =====
+# Build outputs
+app/build/
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+
+# IDE
+*.iml
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# iOS
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/Flutter.framework
+app/ios/Flutter/Flutter.podspec
+app/ios/Flutter/Generated.xcconfig
+app/ios/Flutter/flutter_export_environment.sh
+app/ios/Flutter/App.framework
+app/ios/Flutter/FlutterPluginRegistrant/
+*.xcuserstate
+
+# Android
+app/android/.gradle/
+app/android/local.properties
+app/android/**/gradle-wrapper.jar
+app/android/captures/
+app/android/.cxx/
+app/android/key.properties
+*.jks
+
+# macOS
+app/macos/Flutter/ephemeral/
+app/macos/Flutter/GeneratedPluginRegistrant.swift
+
+# Web
+app/web/.dart_tool/
+
+# Coverage & analysis
+coverage/
+*.lcov
+.dart_tool/
+
+# ===== FastAPI / Python =====
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Distribution / packaging
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+*.pyc

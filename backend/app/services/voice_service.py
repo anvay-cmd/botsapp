@@ -15,8 +15,16 @@ client = genai.Client(api_key=settings.GEMINI_API_KEY)
 class GeminiVoiceBridge:
     """Bridges raw PCM audio over WebSocket to Gemini's Live API."""
 
-    def __init__(self, system_prompt: str = "You are a helpful assistant.", voice_name: str = "Kore"):
+    def __init__(
+        self,
+        system_prompt: str = "You are a helpful assistant.",
+        voice_name: str = "Kore",
+        conversation_history: list[dict[str, str]] | None = None,
+        call_intent_message: str | None = None,
+    ):
         self.system_prompt = system_prompt
+        self.conversation_history = conversation_history or []
+        self.call_intent_message = call_intent_message
         # Normalize user-selected voice to stable presets for this model.
         # Puck can be inconsistent in some sessions; Fenrir is more reliable.
         normalized = (voice_name or "Kore").strip()
@@ -41,6 +49,18 @@ class GeminiVoiceBridge:
         )
         full_prompt = f"{voice_style}\n\n{self.system_prompt}"
 
+        # Include call intent message if provided
+        if self.call_intent_message:
+            full_prompt += f"\n\nCall Context: {self.call_intent_message}"
+
+        # Include conversation history context if available
+        if self.conversation_history:
+            history_summary = "\n\nPrevious Conversation:\n"
+            for msg in self.conversation_history[-10:]:  # Last 10 messages for context
+                role = "User" if msg["role"] == "user" else "You"
+                history_summary += f"{role}: {msg['content']}\n"
+            full_prompt += history_summary
+
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             input_audio_transcription=types.AudioTranscriptionConfig(),
@@ -61,7 +81,7 @@ class GeminiVoiceBridge:
             config=config,
         )
         self.session = await self._session_context.__aenter__()
-        logger.info("Gemini Live session opened")
+        logger.info("Gemini Live session opened with %d history messages", len(self.conversation_history))
 
     async def send_audio(self, audio_data: bytes):
         """Send a chunk of raw PCM audio directly to Gemini."""

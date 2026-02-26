@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.database import async_session
 from app.models.bot import Bot
 from app.models.chat import Chat
+from app.models.message import Message
 from app.models.outbound_call_intent import OutboundCallIntent
 from app.services.call_service import apply_status_transition
 from app.services.voice_service import GeminiVoiceBridge
@@ -60,6 +61,20 @@ async def voice_call(websocket: WebSocket, chat_id: str):
         system_prompt = bot.system_prompt if bot else "You are a helpful assistant."
         voice_name = bot.voice_name if bot and bot.voice_name else "Kore"
 
+        # Fetch conversation history
+        messages_result = await db.execute(
+            select(Message)
+            .where(Message.chat_id == UUID(chat_id))
+            .order_by(Message.created_at.asc())
+        )
+        messages = messages_result.scalars().all()
+        conversation_history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in messages
+            if msg.content_type == "text"  # Only include text messages
+        ]
+
+        call_intent_message = None
         if call_id:
             intent_result = await db.execute(
                 select(OutboundCallIntent).where(
@@ -71,8 +86,16 @@ async def voice_call(websocket: WebSocket, chat_id: str):
             if intent:
                 apply_status_transition(intent, "accepted")
                 db.add(intent)
+                call_intent_message = intent.ring_message
 
-    bridge = GeminiVoiceBridge(system_prompt=system_prompt, voice_name=voice_name)
+        await db.commit()
+
+    bridge = GeminiVoiceBridge(
+        system_prompt=system_prompt,
+        voice_name=voice_name,
+        conversation_history=conversation_history,
+        call_intent_message=call_intent_message,
+    )
 
     try:
         logger.info("Starting Gemini Live session...")
