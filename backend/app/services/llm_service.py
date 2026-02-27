@@ -23,6 +23,7 @@ from app.services.call_service import (
     create_call_intent,
     send_voip_push,
 )
+from app.services.gmail_service import list_emails, search_emails, send_email
 from app.services.reminder_service import schedule_reminder
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,81 @@ CALL_NOW_DECL = types.FunctionDeclaration(
     ),
 )
 
+WEB_SEARCH_DECL = types.FunctionDeclaration(
+    name="web_search",
+    description=(
+        "Search the web for current information, news, or any up-to-date data. "
+        "Use this for questions about current events, latest news, real-time data, or anything that needs recent information."
+    ),
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "query": types.Schema(
+                type=types.Type.STRING,
+                description="The search query to look up on the web.",
+            ),
+        },
+        required=["query"],
+    ),
+)
+
+GMAIL_LIST_EMAILS_DECL = types.FunctionDeclaration(
+    name="gmail_list_emails",
+    description="List recent emails from the user's Gmail inbox.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "max_results": types.Schema(
+                type=types.Type.INTEGER,
+                description="Maximum number of emails to retrieve (default 10, max 20).",
+            ),
+        },
+        required=[],
+    ),
+)
+
+GMAIL_SEARCH_EMAILS_DECL = types.FunctionDeclaration(
+    name="gmail_search_emails",
+    description="Search Gmail emails using a query string (e.g., 'from:john@example.com', 'subject:meeting', 'is:unread').",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "query": types.Schema(
+                type=types.Type.STRING,
+                description="Gmail search query string.",
+            ),
+            "max_results": types.Schema(
+                type=types.Type.INTEGER,
+                description="Maximum number of emails to retrieve (default 5).",
+            ),
+        },
+        required=["query"],
+    ),
+)
+
+GMAIL_SEND_EMAIL_DECL = types.FunctionDeclaration(
+    name="gmail_send_email",
+    description="Send an email from the user's Gmail account.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "to": types.Schema(
+                type=types.Type.STRING,
+                description="Recipient email address.",
+            ),
+            "subject": types.Schema(
+                type=types.Type.STRING,
+                description="Email subject line.",
+            ),
+            "body": types.Schema(
+                type=types.Type.STRING,
+                description="Email body text.",
+            ),
+        },
+        required=["to", "subject", "body"],
+    ),
+)
+
 
 async def _load_chat_history(db: AsyncSession, chat_id: UUID, limit: int = 50) -> list[Message]:
     result = await db.execute(
@@ -145,6 +221,23 @@ def _normalize_message_for_context(msg: Message) -> str:
         return f"We had a voice call earlier (duration {duration or 'unknown'}), but no detailed notes were captured."
     except Exception:
         return "We had a voice call earlier."
+
+
+async def _get_integration(db: AsyncSession, chat_id: UUID, provider: str) -> Integration | None:
+    """Get integration for a chat by provider."""
+    chat_result = await db.execute(select(Chat).where(Chat.id == chat_id))
+    chat = chat_result.scalar_one_or_none()
+    if not chat:
+        return None
+
+    integration_result = await db.execute(
+        select(Integration).where(
+            Integration.user_id == chat.user_id,
+            Integration.provider == provider,
+            Integration.is_active.is_(True),
+        )
+    )
+    return integration_result.scalar_one_or_none()
 
 
 async def _is_web_integration_active(db: AsyncSession, chat_id: UUID) -> bool:
@@ -325,6 +418,71 @@ async def _execute_call_now(
     }
 
 
+async def _execute_web_search(query: str) -> dict:
+    """Execute a web search using Gemini's Google Search capability."""
+    try:
+        response = await client.aio.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=f"Search for: {query}",
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+            ),
+        )
+        search_results = response.text or "No results found."
+        return {"success": True, "results": search_results}
+    except Exception as e:
+        logger.error(f"Web search failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def _execute_gmail_list(db: AsyncSession, chat_id: UUID, args: dict) -> dict:
+    """Execute Gmail list emails."""
+    integration = await _get_integration(db, chat_id, "gmail")
+    if not integration or not integration.credentials:
+        return {"success": False, "error": "Gmail not connected"}
+
+    access_token = integration.credentials.get("access_token")
+    refresh_token = integration.credentials.get("refresh_token")
+    if not access_token or not refresh_token:
+        return {"success": False, "error": "Invalid Gmail credentials"}
+
+    max_results = min(args.get("max_results", 10), 20)
+    return await list_emails(access_token, refresh_token, max_results)
+
+
+async def _execute_gmail_search(db: AsyncSession, chat_id: UUID, args: dict) -> dict:
+    """Execute Gmail search emails."""
+    integration = await _get_integration(db, chat_id, "gmail")
+    if not integration or not integration.credentials:
+        return {"success": False, "error": "Gmail not connected"}
+
+    access_token = integration.credentials.get("access_token")
+    refresh_token = integration.credentials.get("refresh_token")
+    if not access_token or not refresh_token:
+        return {"success": False, "error": "Invalid Gmail credentials"}
+
+    query = args.get("query", "")
+    max_results = min(args.get("max_results", 5), 20)
+    return await search_emails(access_token, refresh_token, query, max_results)
+
+
+async def _execute_gmail_send(db: AsyncSession, chat_id: UUID, args: dict) -> dict:
+    """Execute Gmail send email."""
+    integration = await _get_integration(db, chat_id, "gmail")
+    if not integration or not integration.credentials:
+        return {"success": False, "error": "Gmail not connected"}
+
+    access_token = integration.credentials.get("access_token")
+    refresh_token = integration.credentials.get("refresh_token")
+    if not access_token or not refresh_token:
+        return {"success": False, "error": "Invalid Gmail credentials"}
+
+    to = args.get("to", "")
+    subject = args.get("subject", "")
+    body = args.get("body", "")
+    return await send_email(access_token, refresh_token, to, subject, body)
+
+
 async def _execute_function_call(
     db: AsyncSession, chat_id: UUID, user_id: UUID, fc: types.FunctionCall
 ) -> dict:
@@ -335,6 +493,15 @@ async def _execute_function_call(
         return await _execute_cancel_schedule(db, chat_id, user_id, args)
     elif fc.name == "call_now":
         return await _execute_call_now(db, chat_id, user_id, args)
+    elif fc.name == "web_search":
+        query = args.get("query", "")
+        return await _execute_web_search(query)
+    elif fc.name == "gmail_list_emails":
+        return await _execute_gmail_list(db, chat_id, args)
+    elif fc.name == "gmail_search_emails":
+        return await _execute_gmail_search(db, chat_id, args)
+    elif fc.name == "gmail_send_email":
+        return await _execute_gmail_send(db, chat_id, args)
     return {"error": f"Unknown function: {fc.name}"}
 
 
@@ -353,21 +520,31 @@ async def get_ai_response_stream(
     history = await _load_chat_history(db, chat_id)
     contents = _build_contents(history, user_message)
     web_enabled = await _is_web_integration_active(db, chat_id)
+    gmail_integration = await _get_integration(db, chat_id, "gmail")
+    gmail_enabled = gmail_integration is not None and gmail_integration.credentials is not None
 
     now_ist = datetime.now(IST).strftime("%A, %d %B %Y, %I:%M %p IST")
     system_prompt += f"\n\nCurrent date and time: {now_ist}"
 
-    tools: list[types.Tool] = []
+    # Build function declarations list
+    function_declarations = [SCHEDULE_CALL_DECL, CANCEL_SCHEDULE_DECL, CALL_NOW_DECL]
+
     if web_enabled:
-        tools.append(types.Tool(google_search=types.GoogleSearch()))
+        function_declarations.append(WEB_SEARCH_DECL)
         system_prompt += (
-            "\n\nYou have real-time web search. Use it for any questions about current events, "
+            "\n\nYou have real-time web search via the web_search tool. Use it for any questions about current events, "
             "latest news, live data, or anything that needs up-to-date information."
         )
 
-    tools.append(
-        types.Tool(function_declarations=[SCHEDULE_CALL_DECL, CANCEL_SCHEDULE_DECL, CALL_NOW_DECL])
-    )
+    if gmail_enabled:
+        function_declarations.extend([GMAIL_LIST_EMAILS_DECL, GMAIL_SEARCH_EMAILS_DECL, GMAIL_SEND_EMAIL_DECL])
+        system_prompt += (
+            "\n\nYou have access to the user's Gmail via gmail_list_emails, gmail_search_emails, and gmail_send_email. "
+            "Use these tools when the user asks about their emails or wants to send an email."
+        )
+
+    tools = [types.Tool(function_declarations=function_declarations)]
+
     system_prompt += (
         "\n\nYou can schedule calls to the user using the schedule_call tool. "
         "When the user asks you to call them at a certain time, use this tool. "

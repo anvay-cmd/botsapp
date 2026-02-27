@@ -7,6 +7,8 @@ pydantic-settings
 python-jose[cryptography]
 google-auth
 google-auth-httplib2
+google-auth-oauthlib
+google-api-python-client
 langchain
 langchain-google-genai
 google-genai

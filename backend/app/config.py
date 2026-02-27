@@ -9,8 +9,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 72
     GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_IOS_CLIENT_ID: str = ""
     GCP_PROJECT_ID: str = ""
+    API_BASE_URL: str = "http://localhost:8000"
     PUBSUB_TOPIC: str = "botsapp-notifications"
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
     APNS_TEAM_ID: str = ""
