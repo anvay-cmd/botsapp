@@ -7,25 +7,42 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from app.config import get_settings
+
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 def _get_gmail_service(access_token: str, refresh_token: str):
-    """Create Gmail API service with OAuth credentials."""
+    """Create Gmail API service with OAuth credentials.
+
+    Returns:
+        tuple: (service, new_access_token or None)
+        new_access_token is returned only if token was refreshed
+    """
     creds = Credentials(
         token=access_token,
         refresh_token=refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
+        client_id=settings.GOOGLE_CLIENT_ID,
+        client_secret=settings.GOOGLE_CLIENT_SECRET,
     )
+
+    new_token = None
     if creds.expired and creds.refresh_token:
+        logger.info("Gmail token expired, refreshing...")
         creds.refresh(Request())
-    return build("gmail", "v1", credentials=creds)
+        new_token = creds.token
+        logger.info("Gmail token refreshed successfully")
+
+    service = build("gmail", "v1", credentials=creds)
+    return service, new_token
 
 
 async def list_emails(access_token: str, refresh_token: str, max_results: int = 10) -> dict[str, Any]:
     """List recent emails from inbox."""
     try:
-        service = _get_gmail_service(access_token, refresh_token)
+        service, new_token = _get_gmail_service(access_token, refresh_token)
         results = service.users().messages().list(
             userId="me",
             maxResults=max_results,
@@ -61,7 +78,10 @@ async def list_emails(access_token: str, refresh_token: str, max_results: int = 
                 "body": body[:500] if body else message.get("snippet", "")
             })
 
-        return {"success": True, "emails": emails, "count": len(emails)}
+        result = {"success": True, "emails": emails, "count": len(emails)}
+        if new_token:
+            result["new_access_token"] = new_token
+        return result
     except Exception as e:
         logger.error(f"Failed to list emails: {e}")
         return {"success": False, "error": str(e)}
@@ -70,7 +90,7 @@ async def list_emails(access_token: str, refresh_token: str, max_results: int = 
 async def search_emails(access_token: str, refresh_token: str, query: str, max_results: int = 5) -> dict[str, Any]:
     """Search emails by query."""
     try:
-        service = _get_gmail_service(access_token, refresh_token)
+        service, new_token = _get_gmail_service(access_token, refresh_token)
         results = service.users().messages().list(
             userId="me",
             q=query,
@@ -93,7 +113,10 @@ async def search_emails(access_token: str, refresh_token: str, query: str, max_r
                 "snippet": message.get("snippet", "")
             })
 
-        return {"success": True, "emails": emails, "count": len(emails)}
+        result = {"success": True, "emails": emails, "count": len(emails)}
+        if new_token:
+            result["new_access_token"] = new_token
+        return result
     except Exception as e:
         logger.error(f"Failed to search emails: {e}")
         return {"success": False, "error": str(e)}
@@ -102,7 +125,7 @@ async def search_emails(access_token: str, refresh_token: str, query: str, max_r
 async def send_email(access_token: str, refresh_token: str, to: str, subject: str, body: str) -> dict[str, Any]:
     """Send an email."""
     try:
-        service = _get_gmail_service(access_token, refresh_token)
+        service, new_token = _get_gmail_service(access_token, refresh_token)
 
         message = MIMEText(body)
         message["to"] = to
@@ -113,7 +136,10 @@ async def send_email(access_token: str, refresh_token: str, to: str, subject: st
 
         result = service.users().messages().send(userId="me", body=send_message).execute()
 
-        return {"success": True, "message_id": result["id"]}
+        response = {"success": True, "message_id": result["id"]}
+        if new_token:
+            response["new_access_token"] = new_token
+        return response
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
         return {"success": False, "error": str(e)}

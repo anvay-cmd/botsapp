@@ -339,7 +339,17 @@ async def _execute_gmail_list(db: AsyncSession, chat_id: UUID, args: dict) -> di
         return {"success": False, "error": "Invalid Gmail credentials"}
 
     max_results = min(args.get("max_results", 10), 20)
-    return await list_emails(access_token, refresh_token, max_results)
+    result = await list_emails(access_token, refresh_token, max_results)
+
+    # If token was refreshed, save new access token to database
+    if result.get("new_access_token"):
+        integration.credentials["access_token"] = result["new_access_token"]
+        await db.commit()
+        logger.info("Saved refreshed Gmail access token to database")
+        # Remove from result to avoid confusion
+        del result["new_access_token"]
+
+    return result
 
 
 async def _execute_gmail_search(db: AsyncSession, chat_id: UUID, args: dict) -> dict:
@@ -355,7 +365,16 @@ async def _execute_gmail_search(db: AsyncSession, chat_id: UUID, args: dict) -> 
 
     query = args.get("query", "")
     max_results = min(args.get("max_results", 5), 20)
-    return await search_emails(access_token, refresh_token, query, max_results)
+    result = await search_emails(access_token, refresh_token, query, max_results)
+
+    # If token was refreshed, save new access token to database
+    if result.get("new_access_token"):
+        integration.credentials["access_token"] = result["new_access_token"]
+        await db.commit()
+        logger.info("Saved refreshed Gmail access token to database")
+        del result["new_access_token"]
+
+    return result
 
 
 async def _execute_gmail_send(db: AsyncSession, chat_id: UUID, args: dict) -> dict:
@@ -372,7 +391,16 @@ async def _execute_gmail_send(db: AsyncSession, chat_id: UUID, args: dict) -> di
     to = args.get("to", "")
     subject = args.get("subject", "")
     body = args.get("body", "")
-    return await send_email(access_token, refresh_token, to, subject, body)
+    result = await send_email(access_token, refresh_token, to, subject, body)
+
+    # If token was refreshed, save new access token to database
+    if result.get("new_access_token"):
+        integration.credentials["access_token"] = result["new_access_token"]
+        await db.commit()
+        logger.info("Saved refreshed Gmail access token to database")
+        del result["new_access_token"]
+
+    return result
 
 
 async def _execute_function_call(
