@@ -137,7 +137,7 @@ async def gmail_auth_start(user: User = Depends(get_current_user)):
     )
 
     # Include user ID in state for callback
-    state = create_access_token({"user_id": str(user.id), "type": "gmail_oauth"})
+    state = create_access_token(user.id)
     authorization_url, _ = flow.authorization_url(state=state, access_type="offline", prompt="consent")
 
     return {"authorization_url": authorization_url}
