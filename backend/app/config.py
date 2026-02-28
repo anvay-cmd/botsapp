@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "*"
     PUBLIC_BASE_URL: str = ""
 
+    # LLM Provider Settings
+    LLM_PROVIDER: str = "gemini"  # Options: "gemini", "claude"
+    ANTHROPIC_API_KEY: str = ""  # For Claude
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
 
 
+
+
 class ConnectionManager:
     """Manages active WebSocket connections per user."""
 
@@ -44,6 +46,11 @@ class ConnectionManager:
     async def send_to_user(self, user_id: str, message: dict) -> int:
         if user_id not in self.active_connections:
             return 0
+
+        num_connections = len(self.active_connections[user_id])
+        if num_connections > 1:
+            logger.warning(f"User {user_id} has {num_connections} active connections!")
+
         data = json.dumps(message, default=str)
         delivered = 0
         stale: list[WebSocket] = []
@@ -80,6 +87,7 @@ async def websocket_endpoint(websocket: WebSocket):
         return
 
     await manager.connect(websocket, user_id)
+    logger.info(f"WebSocket connected for user {user_id}, total connections: {len(manager.active_connections.get(user_id, []))}")
     try:
         while True:
             data = await websocket.receive_text()
@@ -91,6 +99,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 content = msg.get("content", "")
                 content_type = msg.get("content_type", "text")
                 attachment_url = msg.get("attachment_url")
+                logger.info(f"Received message content: '{content}' (len={len(content)})")
 
                 async with async_session() as db:
                     result = await db.execute(
@@ -131,14 +140,55 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
 
                     full_response = ""
+                    response_chunks = []  # Store separate messages to save
                     try:
-                        async for token in get_ai_response_stream(db, chat_id, chat.bot_id, content, user_id=UUID(user_id)):
-                            full_response += token
-                            await manager.send_to_user(user_id, {
-                                "type": "stream",
-                                "chat_id": str(chat_id),
-                                "token": token,
-                            })
+                        async for item in get_ai_response_stream(db, chat_id, chat.bot_id, content, user_id=UUID(user_id)):
+                            if isinstance(item, dict):
+                                if item["type"] == "tool_call":
+                                    # Store tool call info as JSON
+                                    tool_data = {
+                                        "name": item['name'],
+                                        "args": item['args']
+                                    }
+
+                                    # Save tool call as a separate message
+                                    tool_msg = Message(
+                                        chat_id=chat_id,
+                                        role="assistant",
+                                        content=json.dumps(tool_data),
+                                        content_type="tool_call",
+                                    )
+                                    db.add(tool_msg)
+                                    await db.flush()
+
+                                    # Send tool call as saved message (not as streaming bubble)
+                                    await manager.send_to_user(user_id, {
+                                        "type": "message",
+                                        "chat_id": str(chat_id),
+                                        "message_id": str(tool_msg.id),
+                                        "role": "assistant",
+                                        "content": tool_msg.content,
+                                        "content_type": "tool_call",
+                                        "created_at": tool_msg.created_at.isoformat(),
+                                    })
+
+                                elif item["type"] == "paragraph":
+                                    # Send paragraph as separate bubble
+                                    await manager.send_to_user(user_id, {
+                                        "type": "paragraph",
+                                        "chat_id": str(chat_id),
+                                        "content": item["content"],
+                                    })
+                                    response_chunks.append(item["content"])
+                                    full_response += item["content"] + "\n"
+                            else:
+                                # Legacy string token support
+                                full_response += item
+                                await manager.send_to_user(user_id, {
+                                    "type": "stream",
+                                    "chat_id": str(chat_id),
+                                    "token": item,
+                                })
                     except Exception as llm_err:
                         logger.exception("LLM streaming error: %s", llm_err)
                         await manager.send_to_user(user_id, {
@@ -147,49 +197,59 @@ async def websocket_endpoint(websocket: WebSocket):
                             "message": f"AI error: {llm_err}",
                         })
 
-                    ai_msg = Message(
-                        chat_id=chat_id,
-                        role="assistant",
-                        content=full_response,
-                        content_type="text",
-                    )
-                    db.add(ai_msg)
-                    chat.last_message_at = datetime.utcnow()
-                    chat.unread_count = (chat.unread_count or 0) + 1
-                    db.add(chat)
-                    await db.commit()
-
-                    # Offline push notification for new AI replies.
-                    user_online = manager.is_online(user_id)
-                    if (
-                        not user_online
-                        and not chat.is_muted
-                        and full_response.strip()
-                    ):
-                        user_result = await db.execute(
-                            select(User).where(User.id == UUID(user_id))
+                    # Only save final text message if there's content
+                    if full_response.strip():
+                        ai_msg = Message(
+                            chat_id=chat_id,
+                            role="assistant",
+                            content=full_response.strip(),
+                            content_type="text",
                         )
-                        db_user = user_result.scalar_one_or_none()
-                        if db_user and db_user.fcm_token:
-                            title = chat.bot.name if chat.bot else "New message"
-                            body = full_response[:160]
-                            await send_notification_pubsub(
-                                user_fcm_token=db_user.fcm_token,
-                                title=title,
-                                body=body,
-                                chat_id=str(chat_id),
-                                avatar_url=chat.bot.avatar_url if chat.bot else None,
-                            )
+                        db.add(ai_msg)
+                        chat.last_message_at = datetime.utcnow()
+                        chat.unread_count = 0  # Reset since user is actively chatting
+                        db.add(chat)
+                        await db.commit()
 
-                    await manager.send_to_user(user_id, {
-                        "type": "message_complete",
-                        "chat_id": str(chat_id),
-                        "message_id": str(ai_msg.id),
-                        "role": "assistant",
-                        "content": full_response,
-                        "content_type": "text",
-                        "created_at": ai_msg.created_at.isoformat(),
-                    })
+                        # Offline push notification for new AI replies.
+                        user_online = manager.is_online(user_id)
+                        if not user_online and not chat.is_muted:
+                            user_result = await db.execute(
+                                select(User).where(User.id == UUID(user_id))
+                            )
+                            db_user = user_result.scalar_one_or_none()
+                            if db_user and db_user.fcm_token:
+                                title = chat.bot.name if chat.bot else "New message"
+                                body = full_response[:160]
+                                await send_notification_pubsub(
+                                    user_fcm_token=db_user.fcm_token,
+                                    title=title,
+                                    body=body,
+                                    chat_id=str(chat_id),
+                                    avatar_url=chat.bot.avatar_url if chat.bot else None,
+                                )
+
+                        await manager.send_to_user(user_id, {
+                            "type": "message_complete",
+                            "chat_id": str(chat_id),
+                            "message_id": str(ai_msg.id),
+                            "role": "assistant",
+                            "content": full_response.strip(),
+                            "content_type": "text",
+                            "created_at": ai_msg.created_at.isoformat(),
+                        })
+                    else:
+                        # Just commit user message and clear typing state if no text response
+                        await db.commit()
+                        await manager.send_to_user(user_id, {
+                            "type": "message_complete",
+                            "chat_id": str(chat_id),
+                            "message_id": "",
+                            "role": "assistant",
+                            "content": "",
+                            "content_type": "text",
+                            "created_at": datetime.utcnow().isoformat(),
+                        })
 
             elif msg_type == "typing":
                 pass  # Could broadcast typing indicators

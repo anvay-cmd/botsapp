@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone, timedelta
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Any
 from uuid import UUID
 
 from google import genai
@@ -32,141 +32,6 @@ client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-SCHEDULE_CALL_DECL = types.FunctionDeclaration(
-    name="schedule_call",
-    description=(
-        "Schedule a phone call from this bot to the user at a specific date and time. "
-        "Use this when the user asks you to call them, remind them via call, or schedule a call."
-    ),
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "time": types.Schema(
-                type=types.Type.STRING,
-                description=(
-                    "ISO 8601 datetime for the call in Indian Standard Time (IST, UTC+05:30). "
-                    "Example: '2026-02-26T09:00:00+05:30'. Always include the +05:30 offset."
-                ),
-            ),
-            "message": types.Schema(
-                type=types.Type.STRING,
-                description="Brief reason for the call, e.g. 'Morning wake-up call' or 'Reminder to take medicine'.",
-            ),
-        },
-        required=["time", "message"],
-    ),
-)
-
-CANCEL_SCHEDULE_DECL = types.FunctionDeclaration(
-    name="cancel_schedule",
-    description=(
-        "Cancel a previously scheduled call. Use when the user wants to cancel or remove a scheduled call."
-    ),
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "message_keyword": types.Schema(
-                type=types.Type.STRING,
-                description="A keyword or phrase from the scheduled call's message to identify which one to cancel.",
-            ),
-        },
-        required=["message_keyword"],
-    ),
-)
-
-CALL_NOW_DECL = types.FunctionDeclaration(
-    name="call_now",
-    description=(
-        "Start an immediate call from this bot to the user right now. "
-        "Use this when the user asks to call now, ring now, or call immediately."
-    ),
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "message": types.Schema(
-                type=types.Type.STRING,
-                description="Short reason for the call ring screen.",
-            ),
-        },
-        required=["message"],
-    ),
-)
-
-WEB_SEARCH_DECL = types.FunctionDeclaration(
-    name="web_search",
-    description=(
-        "Search the web for current information, news, or any up-to-date data. "
-        "Use this for questions about current events, latest news, real-time data, or anything that needs recent information."
-    ),
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "query": types.Schema(
-                type=types.Type.STRING,
-                description="The search query to look up on the web.",
-            ),
-        },
-        required=["query"],
-    ),
-)
-
-GMAIL_LIST_EMAILS_DECL = types.FunctionDeclaration(
-    name="gmail_list_emails",
-    description="List recent emails from the user's Gmail inbox.",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "max_results": types.Schema(
-                type=types.Type.INTEGER,
-                description="Maximum number of emails to retrieve (default 10, max 20).",
-            ),
-        },
-        required=[],
-    ),
-)
-
-GMAIL_SEARCH_EMAILS_DECL = types.FunctionDeclaration(
-    name="gmail_search_emails",
-    description="Search Gmail emails using a query string (e.g., 'from:john@example.com', 'subject:meeting', 'is:unread').",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "query": types.Schema(
-                type=types.Type.STRING,
-                description="Gmail search query string.",
-            ),
-            "max_results": types.Schema(
-                type=types.Type.INTEGER,
-                description="Maximum number of emails to retrieve (default 5).",
-            ),
-        },
-        required=["query"],
-    ),
-)
-
-GMAIL_SEND_EMAIL_DECL = types.FunctionDeclaration(
-    name="gmail_send_email",
-    description="Send an email from the user's Gmail account.",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "to": types.Schema(
-                type=types.Type.STRING,
-                description="Recipient email address.",
-            ),
-            "subject": types.Schema(
-                type=types.Type.STRING,
-                description="Email subject line.",
-            ),
-            "body": types.Schema(
-                type=types.Type.STRING,
-                description="Email body text.",
-            ),
-        },
-        required=["to", "subject", "body"],
-    ),
-)
-
 
 async def _load_chat_history(db: AsyncSession, chat_id: UUID, limit: int = 50) -> list[Message]:
     result = await db.execute(
@@ -178,20 +43,37 @@ async def _load_chat_history(db: AsyncSession, chat_id: UUID, limit: int = 50) -
     return list(reversed(result.scalars().all()))
 
 
-def _build_contents(history: list[Message], user_message: str) -> list[types.Content]:
-    contents: list[types.Content] = []
-    for msg in history:
-        role = "user" if msg.role == "user" else "model"
+def _build_langchain_messages(history: list[Message], user_message: str):
+    """Convert chat history to LangChain messages.
+
+    Note: We skip the last user message in history because it's already
+    saved to DB before this function is called, and we append it separately
+    to avoid duplication.
+    """
+    messages = []
+    for i, msg in enumerate(history):
         if not msg.content:
             continue
         normalized = _normalize_message_for_context(msg)
         if not normalized:
             continue
-        contents.append(types.Content(role=role, parts=[types.Part(text=normalized)]))
 
-    if not contents or contents[-1].role != "user" or contents[-1].parts[0].text != user_message:
-        contents.append(types.Content(role="user", parts=[types.Part(text=user_message)]))
-    return contents
+        # Skip the last user message if it matches the current user_message
+        if msg.role == "user":
+            if i == len(history) - 1 and normalized.strip() == user_message.strip():
+                continue
+            messages.append(HumanMessage(content=normalized))
+        elif msg.role == "assistant" and msg.content_type != "tool_call":
+            # Skip tool call messages (they're just UI indicators)
+            messages.append(AIMessage(content=normalized))
+
+    messages.append(HumanMessage(content=user_message))
+    return messages
+
+
+def _build_contents(history: list[Message], user_message: str):
+    """Legacy function - kept for compatibility."""
+    return _build_langchain_messages(history, user_message)
 
 
 def _normalize_message_for_context(msg: Message) -> str:
@@ -428,7 +310,17 @@ async def _execute_web_search(query: str) -> dict:
                 tools=[types.Tool(google_search=types.GoogleSearch())],
             ),
         )
-        search_results = response.text or "No results found."
+
+        # Extract only text parts from response
+        search_results = ""
+        if response.candidates:
+            for part in response.candidates[0].content.parts:
+                if part.text:
+                    search_results += part.text
+
+        if not search_results:
+            search_results = "No results found."
+
         return {"success": True, "results": search_results}
     except Exception as e:
         logger.error(f"Web search failed: {e}")
@@ -511,8 +403,17 @@ async def get_ai_response_stream(
     bot_id: UUID,
     user_message: str,
     user_id: UUID | None = None,
+    use_langchain: bool = True,
 ) -> AsyncGenerator[str, None]:
     """Stream AI response tokens, handling function calls transparently."""
+    # Use LangChain implementation by default
+    if use_langchain:
+        from app.services.llm_service_langchain import get_ai_response_stream_langchain
+        async for item in get_ai_response_stream_langchain(db, chat_id, bot_id, user_message, user_id):
+            yield item
+        return
+
+    # Legacy Google GenAI implementation
     result = await db.execute(select(Bot).where(Bot.id == bot_id))
     bot = result.scalar_one_or_none()
     system_prompt = bot.system_prompt if bot else "You are a helpful AI assistant."
@@ -575,36 +476,51 @@ async def get_ai_response_stream(
     )
 
     function_calls: list[types.FunctionCall] = []
-    text_parts: list[str] = []
+    has_any_content = False
 
     if response.candidates:
+        # Yield parts in the order they appear
         for part in response.candidates[0].content.parts:
-            if part.function_call:
+            if part.text and part.text.strip():
+                has_any_content = True
+                # Split text into paragraphs and yield each
+                paragraphs = part.text.split("\n\n")
+                for para in paragraphs:
+                    lines = para.split("\n")
+                    for line in lines:
+                        if line.strip():
+                            yield {"type": "paragraph", "content": line.strip()}
+            elif part.function_call:
+                has_any_content = True
                 function_calls.append(part.function_call)
-            elif part.text:
-                text_parts.append(part.text)
+                # Yield tool call immediately to preserve order
+                yield {
+                    "type": "tool_call",
+                    "name": part.function_call.name,
+                    "args": dict(part.function_call.args) if part.function_call.args else {},
+                }
+
+    # Check for schedule fallback if no content
+    if not has_any_content and user_id is not None and _looks_like_schedule_intent(user_message):
+        inferred = _infer_schedule_args_from_text(user_message)
+        if inferred is not None:
+            logger.info("Schedule fallback path used for message: %s", user_message)
+            fc_result = await _execute_schedule_call(db, chat_id, user_id, inferred)
+            logger.info("Schedule fallback result: %s", fc_result)
+            if fc_result.get("success"):
+                yield {
+                    "type": "paragraph",
+                    "content": f"Done. Scheduled your call for {fc_result['scheduled_time']}."
+                }
+        return
 
     if not function_calls:
-        if user_id is not None and _looks_like_schedule_intent(user_message):
-            inferred = _infer_schedule_args_from_text(user_message)
-            if inferred is not None:
-                logger.info("Schedule fallback path used for message: %s", user_message)
-                fc_result = await _execute_schedule_call(db, chat_id, user_id, inferred)
-                logger.info("Schedule fallback result: %s", fc_result)
-                if fc_result.get("success"):
-                    yield (
-                        f"Done. Scheduled your call for {fc_result['scheduled_time']}."
-                    )
-                    return
-        for t in text_parts:
-            yield t
         return
 
     if user_id is None:
-        for t in text_parts:
-            yield t
         return
 
+    # Execute all function calls and collect responses
     function_response_parts: list[types.Part] = []
     for fc in function_calls:
         logger.info("Executing tool call: %s(%s)", fc.name, fc.args)
@@ -622,9 +538,30 @@ async def get_ai_response_stream(
         contents=contents,
         config=config,
     )
+
+    # Accumulate response and split by paragraphs
+    current_paragraph = ""
     async for chunk in stream2:
         if chunk.text:
-            yield chunk.text
+            current_paragraph += chunk.text
+
+            # Check if we have complete paragraphs (split by double newlines or single newlines)
+            while "\n\n" in current_paragraph or "\n" in current_paragraph:
+                if "\n\n" in current_paragraph:
+                    paragraph, rest = current_paragraph.split("\n\n", 1)
+                    current_paragraph = rest
+                elif "\n" in current_paragraph:
+                    paragraph, rest = current_paragraph.split("\n", 1)
+                    current_paragraph = rest
+                else:
+                    break
+
+                if paragraph.strip():
+                    yield {"type": "paragraph", "content": paragraph.strip()}
+
+    # Yield any remaining text
+    if current_paragraph.strip():
+        yield {"type": "paragraph", "content": current_paragraph.strip()}
 
 
 async def get_ai_response(

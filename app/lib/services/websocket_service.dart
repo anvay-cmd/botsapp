@@ -20,6 +20,14 @@ class WebSocketService {
     _shouldReconnect = true;
     if (_isConnected) return;
 
+    // Close any existing channel before creating a new one
+    if (_channel != null) {
+      try {
+        await _channel!.sink.close();
+      } catch (_) {}
+      _channel = null;
+    }
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('access_token');

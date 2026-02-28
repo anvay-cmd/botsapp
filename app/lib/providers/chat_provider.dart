@@ -123,13 +123,23 @@ class ChatMessagesState {
   final List<Message> messages;
   final bool isLoading;
   final bool isBotTyping;
-  final String streamingContent;
+  final List<MessageBubble> streamingBubbles;
 
   const ChatMessagesState({
     this.messages = const [],
     this.isLoading = false,
     this.isBotTyping = false,
-    this.streamingContent = '',
+    this.streamingBubbles = const [],
+  });
+}
+
+class MessageBubble {
+  final String type; // 'text', 'tool_call'
+  final String content;
+
+  const MessageBubble({
+    required this.type,
+    required this.content,
   });
 }
 
@@ -165,53 +175,92 @@ class ChatMessagesNotifier extends StateNotifier<ChatMessagesState> {
 
       switch (msg['type']) {
         case 'message':
-          if (msg['role'] == 'user') {
-            final message = Message(
-              id: msg['message_id'] ?? '',
-              chatId: chatId,
-              role: 'user',
-              content: msg['content'] ?? '',
-              contentType: msg['content_type'] ?? 'text',
-              attachmentUrl: msg['attachment_url'],
-              createdAt: DateTime.now(),
-            );
-            state = ChatMessagesState(
-              messages: [...state.messages, message],
-            );
+          final messageId = msg['message_id'] ?? '';
+
+          // Check if message already exists (prevent duplicates)
+          final exists = state.messages.any((m) => m.id == messageId);
+          if (exists) {
+            print('Skipping duplicate message: $messageId');
+            return;
           }
+
+          final message = Message(
+            id: messageId,
+            chatId: chatId,
+            role: msg['role'] ?? 'user',
+            content: msg['content'] ?? '',
+            contentType: msg['content_type'] ?? 'text',
+            attachmentUrl: msg['attachment_url'],
+            createdAt: DateTime.now(),
+          );
+          state = ChatMessagesState(
+            messages: [...state.messages, message],
+            isBotTyping: state.isBotTyping,
+            streamingBubbles: state.streamingBubbles,
+          );
           break;
 
         case 'typing':
           state = ChatMessagesState(
             messages: state.messages,
             isBotTyping: true,
-            streamingContent: '',
+            streamingBubbles: [],
+          );
+          break;
+
+        case 'paragraph':
+          final content = msg['content'] ?? '';
+          state = ChatMessagesState(
+            messages: state.messages,
+            isBotTyping: true,
+            streamingBubbles: [
+              ...state.streamingBubbles,
+              MessageBubble(type: 'text', content: content),
+            ],
           );
           break;
 
         case 'stream':
-          final token = msg['token'] ?? '';
-          state = ChatMessagesState(
-            messages: state.messages,
-            isBotTyping: true,
-            streamingContent: state.streamingContent + token,
-          );
+          // Legacy streaming support - will be removed
           break;
 
         case 'message_complete':
-          final message = Message(
-            id: msg['message_id'] ?? '',
-            chatId: chatId,
-            role: 'assistant',
-            content: msg['content'] ?? '',
-            contentType: msg['content_type'] ?? 'text',
-            createdAt: DateTime.now(),
-          );
-          state = ChatMessagesState(
-            messages: [...state.messages, message],
-            isBotTyping: false,
-            streamingContent: '',
-          );
+          final content = msg['content'] ?? '';
+          final messageId = msg['message_id'] ?? '';
+
+          // Only add message if there's content and it doesn't already exist
+          if (content.isNotEmpty && messageId.isNotEmpty) {
+            final exists = state.messages.any((m) => m.id == messageId);
+            if (exists) {
+              // Message already added, just clear typing state
+              state = ChatMessagesState(
+                messages: state.messages,
+                isBotTyping: false,
+                streamingBubbles: [],
+              );
+            } else {
+              final message = Message(
+                id: messageId,
+                chatId: chatId,
+                role: 'assistant',
+                content: content,
+                contentType: msg['content_type'] ?? 'text',
+                createdAt: DateTime.now(),
+              );
+              state = ChatMessagesState(
+                messages: [...state.messages, message],
+                isBotTyping: false,
+                streamingBubbles: [],
+              );
+            }
+          } else {
+            // Just clear typing state
+            state = ChatMessagesState(
+              messages: state.messages,
+              isBotTyping: false,
+              streamingBubbles: [],
+            );
+          }
           break;
       }
     });

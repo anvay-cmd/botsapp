@@ -72,12 +72,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     ref.listen(chatMessagesProvider(widget.chatId), (prev, next) {
       if (prev?.messages.length != next.messages.length ||
-          prev?.streamingContent != next.streamingContent) {
+          prev?.streamingBubbles.length != next.streamingBubbles.length) {
         _scrollToBottom();
       }
     });
 
     return PopScope(
+      canPop: true,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) _clearActiveChatIfNeeded();
       },
@@ -183,17 +184,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 8),
                       itemCount: chatState.messages.length +
-                          (chatState.isBotTyping &&
-                                  chatState.streamingContent.isNotEmpty
-                              ? 1
+                          (chatState.isBotTyping
+                              ? chatState.streamingBubbles.length
                               : 0),
                       itemBuilder: (context, index) {
-                        if (index == chatState.messages.length) {
+                        // Handle streaming bubbles
+                        if (index >= chatState.messages.length) {
+                          final bubbleIndex = index - chatState.messages.length;
+                          final bubble = chatState.streamingBubbles[bubbleIndex];
                           return ChatBubble(
-                            content: chatState.streamingContent,
+                            content: bubble.content,
                             isUser: false,
                             timestamp: DateTime.now(),
                             isStreaming: true,
+                            contentType: bubble.type == 'tool_call' ? 'tool_call' : 'text',
                           );
                         }
                         final message = chatState.messages[index];

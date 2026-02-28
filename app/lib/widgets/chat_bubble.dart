@@ -1,7 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../config/constants.dart';
 import '../config/theme.dart';
@@ -34,6 +36,15 @@ class ChatBubble extends StatelessWidget {
         isUser: isUser,
         timestamp: timestamp,
         isDark: isDark,
+      );
+    }
+
+    if (contentType == 'tool_call') {
+      return _ToolCallBubble(
+        content: content,
+        timestamp: timestamp,
+        isDark: isDark,
+        isStreaming: isStreaming,
       );
     }
 
@@ -120,32 +131,82 @@ class ChatBubble extends StatelessWidget {
                 Stack(
                   children: [
                     Padding(
-                      padding: EdgeInsets.only(
-                        bottom: isUser ? 0 : 0,
-                      ),
-                      child: RichText(
-                        text: TextSpan(
-                          text: content,
-                          style: TextStyle(
-                            fontSize: 14.5,
-                            height: 1.25,
-                            color: isDark
-                                ? Colors.white.withValues(alpha: 0.92)
-                                : Colors.black.withValues(alpha: 0.87),
-                          ),
-                          children: [
-                            WidgetSpan(
-                              child: Padding(
-                                padding: const EdgeInsets.only(left: 6),
-                                child: Opacity(
-                                  opacity: 0,
-                                  child: timeWidget,
+                      padding: const EdgeInsets.only(bottom: 0),
+                      child: isUser
+                          ? RichText(
+                              text: TextSpan(
+                                text: content,
+                                style: TextStyle(
+                                  fontSize: 14.5,
+                                  height: 1.25,
+                                  color: isDark
+                                      ? Colors.white.withValues(alpha: 0.92)
+                                      : Colors.black.withValues(alpha: 0.87),
                                 ),
+                                children: [
+                                  WidgetSpan(
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(left: 6),
+                                      child: Opacity(
+                                        opacity: 0,
+                                        child: timeWidget,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
+                            )
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                MarkdownBody(
+                                  data: content,
+                                  selectable: true,
+                                  styleSheet: MarkdownStyleSheet(
+                                    p: TextStyle(
+                                      fontSize: 14.5,
+                                      height: 1.25,
+                                      color: isDark
+                                          ? Colors.white.withValues(alpha: 0.92)
+                                          : Colors.black.withValues(alpha: 0.87),
+                                    ),
+                                    code: TextStyle(
+                                      fontSize: 13,
+                                      backgroundColor: isDark
+                                          ? Colors.white.withValues(alpha: 0.1)
+                                          : Colors.black.withValues(alpha: 0.05),
+                                      color: isDark
+                                          ? Colors.white.withValues(alpha: 0.95)
+                                          : Colors.black.withValues(alpha: 0.9),
+                                    ),
+                                    codeblockDecoration: BoxDecoration(
+                                      color: isDark
+                                          ? Colors.white.withValues(alpha: 0.08)
+                                          : Colors.black.withValues(alpha: 0.03),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    blockquote: TextStyle(
+                                      color: isDark
+                                          ? Colors.white.withValues(alpha: 0.7)
+                                          : Colors.black.withValues(alpha: 0.7),
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                    a: TextStyle(
+                                      color: AppTheme.tealGreen,
+                                      decoration: TextDecoration.underline,
+                                    ),
+                                  ),
+                                  onTapLink: (text, href, title) {
+                                    if (href != null) {
+                                      launchUrl(Uri.parse(href),
+                                          mode: LaunchMode.externalApplication);
+                                    }
+                                  },
+                                ),
+                                const SizedBox(height: 2),
+                                Opacity(opacity: 0, child: timeWidget),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
                     ),
                     Positioned(
                       right: 0,
@@ -473,4 +534,118 @@ bool _needsSpace(String left, String right) {
   if (punctuation.contains(first)) return false;
   if (last == '(' || last == '[' || last == '{' || last == '-') return false;
   return true;
+}
+
+class _ToolCallBubble extends StatelessWidget {
+  final String content;
+  final DateTime timestamp;
+  final bool isDark;
+  final bool isStreaming;
+
+  const _ToolCallBubble({
+    required this.content,
+    required this.timestamp,
+    required this.isDark,
+    required this.isStreaming,
+  });
+
+  String _formatToolCall(String content) {
+    try {
+      final data = jsonDecode(content);
+      final name = data['name'] ?? 'unknown';
+      final args = data['args'] ?? {};
+
+      switch (name) {
+        case 'web_search':
+          final query = args['query'] ?? '';
+          return 'Searching the web for "$query"';
+
+        case 'gmail_list_emails':
+          final count = args['max_results'] ?? 10;
+          return 'Checking inbox ($count emails)';
+
+        case 'gmail_search_emails':
+          final query = args['query'] ?? '';
+          return 'Searching emails for "$query"';
+
+        case 'gmail_send_email':
+          final to = args['to'] ?? '';
+          final subject = args['subject'] ?? '';
+          return 'Sending email to $to${subject.isNotEmpty ? ' - "$subject"' : ''}';
+
+        case 'schedule_call':
+          final time = args['scheduled_time'] ?? '';
+          return 'Scheduling call${time.isNotEmpty ? ' for $time' : ''}';
+
+        case 'call_now':
+          final message = args['message'] ?? '';
+          return 'Calling now${message.isNotEmpty ? ' - $message' : ''}';
+
+        case 'cancel_schedule':
+          final keyword = args['keyword'] ?? '';
+          return 'Canceling scheduled call${keyword.isNotEmpty ? ' ($keyword)' : ''}';
+
+        default:
+          // Format any args
+          if (args.isEmpty) {
+            return name.replaceAll('_', ' ');
+          }
+          final argsList = args.entries
+              .map((e) => '${e.key}: ${e.value}')
+              .join(', ');
+          return '${name.replaceAll('_', ' ')} ($argsList)';
+      }
+    } catch (e) {
+      // Fallback for non-JSON content
+      return content;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final timeStr = DateFormat('h:mm a').format(timestamp);
+    final formattedContent = _formatToolCall(content);
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 6, right: 48, top: 1, bottom: 1),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.circle,
+              size: 4,
+              color: isDark
+                  ? Colors.grey.shade600
+                  : Colors.grey.shade500,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                formattedContent,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                  color: isDark
+                      ? Colors.grey.shade500
+                      : Colors.grey.shade600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              timeStr,
+              style: TextStyle(
+                fontSize: 10,
+                color: isDark
+                    ? Colors.grey.shade700
+                    : Colors.grey.shade500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

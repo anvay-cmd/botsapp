@@ -5,7 +5,9 @@ import 'package:go_router/go_router.dart';
 import '../../config/constants.dart';
 import '../../config/theme.dart';
 import '../../models/bot.dart';
+import '../../models/integration.dart';
 import '../../providers/bot_provider.dart';
+import '../home/integrations_tab.dart';
 
 class EditBotScreen extends ConsumerStatefulWidget {
   final Bot bot;
@@ -26,6 +28,7 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
   String? _avatarUrl;
   late String _voiceName;
   late int _proactiveMinutes;
+  late Map<String, List<String>> _selectedTools;
 
   static const List<Map<String, dynamic>> _proactiveOptions = [
     {'label': 'Never', 'minutes': 0},
@@ -46,6 +49,16 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
     _avatarUrl = widget.bot.avatarUrl;
     _voiceName = widget.bot.voiceName;
     _proactiveMinutes = widget.bot.proactiveMinutes ?? 0;
+
+    // Initialize selected tools from bot's integrations_config
+    _selectedTools = {};
+    if (widget.bot.integrationsConfig != null) {
+      widget.bot.integrationsConfig!.forEach((key, value) {
+        if (value is List) {
+          _selectedTools[key] = List<String>.from(value);
+        }
+      });
+    }
   }
 
   @override
@@ -328,6 +341,9 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 12),
+
+                  _buildIntegrationsSection(isDark, cardColor, subtleText),
                   const SizedBox(height: 24),
 
                   SizedBox(
@@ -449,6 +465,121 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
     );
   }
 
+  Widget _buildIntegrationsSection(bool isDark, Color cardColor, Color subtleText) {
+    final integrationsAsync = ref.watch(integrationsProvider);
+
+    return integrationsAsync.when(
+      data: (integrations) {
+        final connectedIntegrations = integrations.where((i) => i.isConnected).toList();
+        if (connectedIntegrations.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        return _SectionCard(
+          isDark: isDark,
+          cardColor: cardColor,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 8),
+              child: Row(
+                children: [
+                  Icon(Icons.extension_outlined,
+                      size: 20, color: AppTheme.tealGreen),
+                  const SizedBox(width: 14),
+                  Text(
+                    'Enabled Tools',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.grey.shade300 : Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            ...connectedIntegrations.map((integration) {
+              return _buildIntegrationTools(integration, isDark);
+            }),
+          ],
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+
+  Widget _buildIntegrationTools(IntegrationInfo integration, bool isDark) {
+    final tools = _getToolsForIntegration(integration.provider);
+    final selectedForProvider = _selectedTools[integration.provider] ?? [];
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, top: 8, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            integration.name,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: isDark ? Colors.grey.shade400 : Colors.grey.shade700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: tools.map((tool) {
+              final isSelected = selectedForProvider.contains(tool['id']);
+              return FilterChip(
+                label: Text(tool['label']!),
+                selected: isSelected,
+                onSelected: (selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedTools[integration.provider] = [
+                        ...selectedForProvider,
+                        tool['id']!
+                      ];
+                    } else {
+                      _selectedTools[integration.provider] = selectedForProvider
+                          .where((t) => t != tool['id'])
+                          .toList();
+                    }
+                  });
+                },
+                selectedColor: AppTheme.tealGreen.withValues(alpha: 0.18),
+                checkmarkColor: AppTheme.tealGreen,
+                side: BorderSide(
+                  color: isSelected ? AppTheme.tealGreen : Colors.transparent,
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Map<String, String>> _getToolsForIntegration(String provider) {
+    switch (provider) {
+      case 'web_search':
+        return [
+          {'id': 'web_search', 'label': 'Web Search'},
+          {'id': 'scrape_url', 'label': 'Scrape URL'},
+        ];
+      case 'gmail':
+        return [
+          {'id': 'gmail_list_emails', 'label': 'List Emails'},
+          {'id': 'gmail_search_emails', 'label': 'Search Emails'},
+          {'id': 'gmail_send_email', 'label': 'Send Email'},
+          {'id': 'gmail_read_email', 'label': 'Read Email'},
+        ];
+      default:
+        return [];
+    }
+  }
+
   Future<void> _saveBot() async {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
@@ -465,6 +596,7 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
           systemPrompt: _systemPromptController.text.trim(),
           voiceName: _voiceName,
           proactiveMinutes: _proactiveMinutes,
+          integrationsConfig: _selectedTools,
         );
 
     if (updated != null && mounted) {

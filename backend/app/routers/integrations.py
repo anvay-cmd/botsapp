@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -78,6 +79,7 @@ async def connect_integration(
     if existing:
         existing.is_active = True
         db.add(existing)
+        await db.commit()
         return {"status": "connected", "integration_id": str(existing.id)}
 
     integration = Integration(
@@ -86,7 +88,7 @@ async def connect_integration(
         is_active=True,
     )
     db.add(integration)
-    await db.flush()
+    await db.commit()
     return {"status": "connected", "integration_id": str(integration.id)}
 
 
@@ -108,6 +110,7 @@ async def disconnect_integration(
 
     integration.is_active = False
     db.add(integration)
+    await db.commit()
     return {"status": "disconnected"}
 
 
@@ -206,4 +209,62 @@ async def gmail_auth_callback(
 
     await db.commit()
 
-    return {"status": "success", "message": "Gmail connected successfully"}
+    # Return HTML page for browser
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Gmail Connected</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                height: 100vh;
+                margin: 0;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            }
+            .container {
+                background: white;
+                padding: 40px;
+                border-radius: 20px;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+                text-align: center;
+                max-width: 400px;
+            }
+            .success-icon {
+                font-size: 64px;
+                margin-bottom: 20px;
+            }
+            h1 {
+                color: #333;
+                margin-bottom: 10px;
+            }
+            p {
+                color: #666;
+                margin-bottom: 30px;
+            }
+            .btn {
+                background: #10b981;
+                color: white;
+                border: none;
+                padding: 12px 30px;
+                border-radius: 8px;
+                font-size: 16px;
+                cursor: pointer;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="success-icon">✅</div>
+            <h1>Gmail Connected!</h1>
+            <p>Your Gmail account has been successfully connected. You can now close this window and return to the app.</p>
+            <button class="btn" onclick="window.close()">Close Window</button>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)

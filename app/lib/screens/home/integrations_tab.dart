@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/theme.dart';
 import '../../models/integration.dart';
@@ -16,6 +17,58 @@ final integrationsProvider =
     return [];
   }
 });
+
+Future<void> _handleOAuthConnect(
+    BuildContext context, String provider, WidgetRef ref) async {
+  final api = ApiService();
+  try {
+    // Get OAuth URL from backend
+    final response = await api.get('/integrations/$provider/auth');
+    final authUrl = response.data['authorization_url'] as String;
+
+    // Open browser for OAuth
+    final uri = Uri.parse(authUrl);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+      // Show dialog to user
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            title: const Text('Complete Sign-In'),
+            content: const Text(
+              'Please complete the sign-in process in your browser. Once done, come back here and tap "I\'ve Signed In".',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  // Refresh integrations to check if OAuth completed
+                  ref.invalidate(integrationsProvider);
+                },
+                child: const Text('I\'ve Signed In'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to start OAuth: $e')),
+      );
+    }
+  }
+}
 
 class IntegrationsTab extends ConsumerWidget {
   const IntegrationsTab({super.key});
@@ -76,14 +129,30 @@ class IntegrationsTab extends ConsumerWidget {
                                 final api = ApiService();
                                 try {
                                   if (integration.isConnected) {
+                                    // Disconnect
                                     await api.delete(
                                         '/integrations/${integration.provider}');
+                                    ref.invalidate(integrationsProvider);
                                   } else {
-                                    await api.post(
-                                        '/integrations/${integration.provider}/connect');
+                                    // Connect
+                                    if (integration.requiresOauth) {
+                                      // Handle OAuth flow
+                                      await _handleOAuthConnect(
+                                          context, integration.provider, ref);
+                                    } else {
+                                      // Simple connect
+                                      await api.post(
+                                          '/integrations/${integration.provider}/connect');
+                                      ref.invalidate(integrationsProvider);
+                                    }
                                   }
-                                  ref.invalidate(integrationsProvider);
-                                } catch (_) {}
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Error: $e')),
+                                    );
+                                  }
+                                }
                               },
                             );
                           },
