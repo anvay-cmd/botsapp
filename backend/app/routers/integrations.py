@@ -133,7 +133,7 @@ async def gmail_auth_start(user: User = Depends(get_current_user)):
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.send",
         ],
-        redirect_uri=f"{settings.API_BASE_URL}/integrations/gmail/callback",
+        redirect_uri=f"{settings.API_BASE_URL}/api/integrations/gmail/callback",
     )
 
     # Include user ID in state for callback
@@ -170,7 +170,7 @@ async def gmail_auth_callback(
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.send",
         ],
-        redirect_uri=f"{settings.API_BASE_URL}/integrations/gmail/callback",
+        redirect_uri=f"{settings.API_BASE_URL}/api/integrations/gmail/callback",
     )
 
     flow.fetch_token(code=code)
