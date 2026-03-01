@@ -9,6 +9,9 @@ class BotCreateRequest(BaseModel):
     voice_name: str = "Kore"
     integrations_config: dict | None = None
     proactive_minutes: int | None = 0
+    proactive_interval_minutes: int | None = None  # T - proactive interval, None = never
+    proactive_max_messages: int | None = 5  # M - max messages before user response
+    proactivity_prompt: str | None = None  # Custom prompt for proactive checks
 
 
 class BotUpdateRequest(BaseModel):
@@ -18,6 +21,9 @@ class BotUpdateRequest(BaseModel):
     integrations_config: dict | None = None
     avatar_url: str | None = None
     proactive_minutes: int | None = None
+    proactive_interval_minutes: int | None = None
+    proactive_max_messages: int | None = None
+    proactivity_prompt: str | None = None
 
 
 class ImageGenerateRequest(BaseModel):
@@ -33,6 +39,9 @@ class BotResponse(BaseModel):
     voice_name: str
     integrations_config: dict | None
     proactive_minutes: int | None = 0
+    proactive_interval_minutes: int | None = None
+    proactive_max_messages: int | None = 5
+    proactivity_prompt: str | None = None
     is_default: bool
     created_at: datetime
 

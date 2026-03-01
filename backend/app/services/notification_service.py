@@ -233,11 +233,42 @@ async def send_notification_direct(
     try:
         from firebase_admin import messaging
 
-        message = messaging.Message(
-            notification=messaging.Notification(title=title, body=body),
-            data={"chat_id": chat_id or "", "avatar_url": _absolute_avatar_url(avatar_url)},
-            token=user_fcm_token,
+        # For iOS: Use APNS-specific payload to support mutable-content and custom UI
+        apns_config = messaging.APNSConfig(
+            payload=messaging.APNSPayload(
+                aps=messaging.Aps(
+                    alert=messaging.ApsAlert(title=title, body=body),
+                    sound="default",
+                    badge=1,
+                    mutable_content=True,  # Required for NotificationService extension
+                    category="CHAT_MESSAGE",  # Required for custom UI
+                ),
+                custom_data={
+                    "chat_id": chat_id or "",
+                    "avatar_url": _absolute_avatar_url(avatar_url),
+                },
+            )
         )
+
+        # For Android: Use data payload
+        android_config = messaging.AndroidConfig(
+            notification=messaging.AndroidNotification(
+                title=title,
+                body=body,
+                sound="default",
+            ),
+            data={
+                "chat_id": chat_id or "",
+                "avatar_url": _absolute_avatar_url(avatar_url),
+            },
+        )
+
+        message = messaging.Message(
+            token=user_fcm_token,
+            apns=apns_config,
+            android=android_config,
+        )
+
         messaging.send(message)
         logger.info(f"Sent FCM notification to {user_fcm_token[:20]}...")
     except Exception as e:

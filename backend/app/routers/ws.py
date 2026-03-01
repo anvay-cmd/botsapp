@@ -123,6 +123,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     chat.unread_count = 0
                     await db.flush()
 
+                    # Reset proactive message counter when user sends a message
+                    from app.services.proactive_service import reset_proactive_counter
+                    try:
+                        await reset_proactive_counter(chat_id)
+                    except Exception as e:
+                        logger.warning("Failed to reset proactive counter: %s", e)
+
                     await manager.send_to_user(user_id, {
                         "type": "message",
                         "chat_id": str(chat_id),

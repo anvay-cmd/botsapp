@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.database import async_session
-from app.routers import auth, chats, bots, integrations, ws, voice, uploads, calls, schedules
+from app.routers import auth, chats, bots, integrations, ws, voice, uploads, calls, schedules, lifecycle
 from app.services.reminder_service import start_scheduler, stop_scheduler, load_pending_reminders
 from app.services.proactive_service import load_proactive_jobs
 
@@ -54,6 +54,7 @@ app.include_router(integrations.router, prefix="/api")
 app.include_router(uploads.router, prefix="/api")
 app.include_router(calls.router, prefix="/api")
 app.include_router(schedules.router, prefix="/api")
+app.include_router(lifecycle.router, prefix="/api")
 app.include_router(ws.router)
 app.include_router(voice.router)
 

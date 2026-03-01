@@ -32,9 +32,37 @@ def _get_proactive_minutes(bot: Bot) -> int | None:
     return None if m <= 0 else m
 
 
+def _get_proactive_interval_minutes(bot: Bot) -> int | None:
+    cfg = bot.integrations_config or {}
+    val = cfg.get("proactive_interval_minutes")
+    if val is None:
+        return None
+    try:
+        return int(val) if int(val) > 0 else None
+    except Exception:
+        return None
+
+
+def _get_proactive_max_messages(bot: Bot) -> int:
+    cfg = bot.integrations_config or {}
+    val = cfg.get("proactive_max_messages", 5)
+    try:
+        return int(val)
+    except Exception:
+        return 5
+
+
+def _get_proactivity_prompt(bot: Bot) -> str | None:
+    cfg = bot.integrations_config or {}
+    return cfg.get("proactivity_prompt")
+
+
 def _to_bot_response(bot: Bot) -> BotResponse:
     payload = BotResponse.model_validate(bot).model_dump()
     payload["proactive_minutes"] = _get_proactive_minutes(bot)
+    payload["proactive_interval_minutes"] = _get_proactive_interval_minutes(bot)
+    payload["proactive_max_messages"] = _get_proactive_max_messages(bot)
+    payload["proactivity_prompt"] = _get_proactivity_prompt(bot)
     return BotResponse(**payload)
 
 
@@ -54,17 +82,23 @@ async def create_bot(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    config = request.integrations_config or {}
+    config["proactive_minutes"] = (
+        request.proactive_minutes if request.proactive_minutes is not None else DEFAULT_PROACTIVE_MINUTES
+    )
+    if request.proactive_interval_minutes is not None:
+        config["proactive_interval_minutes"] = request.proactive_interval_minutes
+    if request.proactive_max_messages is not None:
+        config["proactive_max_messages"] = request.proactive_max_messages
+    if request.proactivity_prompt is not None:
+        config["proactivity_prompt"] = request.proactivity_prompt
+
     bot = Bot(
         creator_id=user.id,
         name=request.name,
         system_prompt=request.system_prompt,
         voice_name=request.voice_name,
-        integrations_config={
-            **(request.integrations_config or {}),
-            "proactive_minutes": request.proactive_minutes
-            if request.proactive_minutes is not None
-            else DEFAULT_PROACTIVE_MINUTES,
-        },
+        integrations_config=config,
     )
     db.add(bot)
     await db.flush()
@@ -72,7 +106,9 @@ async def create_bot(
     chat = Chat(user_id=user.id, bot_id=bot.id)
     db.add(chat)
     await db.flush()
-    await upsert_proactive_job(bot.id, _get_proactive_minutes(bot))
+    # Use new proactive_interval_minutes if set, otherwise fall back to proactive_minutes
+    interval = _get_proactive_interval_minutes(bot) or _get_proactive_minutes(bot)
+    await upsert_proactive_job(bot.id, interval)
 
     return _to_bot_response(bot)
 
@@ -99,13 +135,30 @@ async def update_bot(
         bot.integrations_config = request.integrations_config
     if request.avatar_url is not None:
         bot.avatar_url = request.avatar_url
+
+    # Update proactivity config fields
+    cfg = dict(bot.integrations_config or {})
+    config_updated = False
     if request.proactive_minutes is not None:
-        cfg = dict(bot.integrations_config or {})
         cfg["proactive_minutes"] = request.proactive_minutes
+        config_updated = True
+    if request.proactive_interval_minutes is not None:
+        cfg["proactive_interval_minutes"] = request.proactive_interval_minutes
+        config_updated = True
+    if request.proactive_max_messages is not None:
+        cfg["proactive_max_messages"] = request.proactive_max_messages
+        config_updated = True
+    if request.proactivity_prompt is not None:
+        cfg["proactivity_prompt"] = request.proactivity_prompt
+        config_updated = True
+    if config_updated:
         bot.integrations_config = cfg
+
     db.add(bot)
     await db.flush()
-    await upsert_proactive_job(bot.id, _get_proactive_minutes(bot))
+    # Use new proactive_interval_minutes if set, otherwise fall back to proactive_minutes
+    interval = _get_proactive_interval_minutes(bot) or _get_proactive_minutes(bot)
+    await upsert_proactive_job(bot.id, interval)
     return _to_bot_response(bot)
 
 

@@ -53,17 +53,11 @@ class NotificationService: UNNotificationServiceExtension {
         try? fileManager.removeItem(at: localUrl)
         try fileManager.copyItem(at: tempUrl, to: localUrl)
 
-        // Options to ensure image shows as thumbnail in collapsed notification
-        let options: [String: Any] = [
-          UNNotificationAttachmentOptionsTypeHintKey: "public.jpeg",
-          UNNotificationAttachmentOptionsThumbnailClippingRectKey: CGRect(x: 0, y: 0, width: 1, height: 1).dictionaryRepresentation,
-          UNNotificationAttachmentOptionsThumbnailHiddenKey: false
-        ]
-
+        // Create attachment without clipping rect (simpler and more compatible)
         let attachment = try UNNotificationAttachment(
           identifier: "avatar",
           url: localUrl,
-          options: options
+          options: nil
         )
         bestAttemptContent.attachments = [attachment]
         print("[NotificationService] Successfully attached avatar image")
