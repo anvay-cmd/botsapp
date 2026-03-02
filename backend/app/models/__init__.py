@@ -7,5 +7,6 @@ from app.models.proactive_state import ProactiveState
 from app.models.reminder import Reminder
 from app.models.integration import Integration
 from app.models.outbound_call_intent import OutboundCallIntent
+from app.models.geofence import Geofence, GeofenceSubscription, LocationTracking
 
-__all__ = ["User", "Bot", "Chat", "Message", "LifecycleMessage", "ProactiveState", "Reminder", "Integration", "OutboundCallIntent"]
+__all__ = ["User", "Bot", "Chat", "Message", "LifecycleMessage", "ProactiveState", "Reminder", "Integration", "OutboundCallIntent", "Geofence", "GeofenceSubscription", "LocationTracking"]

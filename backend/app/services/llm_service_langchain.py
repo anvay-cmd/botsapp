@@ -32,6 +32,12 @@ from app.services.llm_service import (
     _execute_gmail_list,
     _execute_gmail_search,
     _execute_gmail_send,
+    _execute_get_location,
+    _execute_create_fence,
+    _execute_subscribe_to_fence,
+    _execute_get_track,
+    _execute_search_places,
+    _execute_reverse_geocode,
     IST,
 )
 
@@ -167,6 +173,93 @@ async def gmail_send_email_tool(to: str, subject: str, body: str) -> dict:
     )
 
 
+# GPS tools
+@tool
+async def get_location_tool() -> dict:
+    """Get the user's current or most recent GPS location.
+
+    Returns latitude, longitude, accuracy, and when the location was recorded.
+    Requires GPS integration to be enabled.
+    """
+    return await _execute_get_location(_current_db, _current_user_id, _current_chat_id)
+
+
+@tool
+async def create_fence_tool(name: str, latitude: float, longitude: float, radius: float = 100) -> dict:
+    """Create a new geofence (circular area) for location-based alerts.
+
+    Args:
+        name: Name for the geofence (e.g., 'Home', 'Office', 'Gym')
+        latitude: Latitude of the center point
+        longitude: Longitude of the center point
+        radius: Radius in meters (default 100, range 10-10000)
+    """
+    return await _execute_create_fence(
+        _current_db, _current_user_id,
+        {"name": name, "latitude": latitude, "longitude": longitude, "radius": radius}
+    )
+
+
+@tool
+async def subscribe_to_fence_tool(fence_name: str, event_type: str = "enter") -> dict:
+    """Subscribe to geofence events to receive notifications.
+
+    Args:
+        fence_name: Name of the geofence to subscribe to
+        event_type: Type of event - 'enter' (entering area), 'exit' (leaving area), or 'dwell' (staying inside)
+    """
+    return await _execute_subscribe_to_fence(
+        _current_db, _current_user_id, _current_chat_id,
+        {"fence_name": fence_name, "event_type": event_type}
+    )
+
+
+@tool
+async def get_track_tool(hours: int = 24) -> dict:
+    """Get the user's location tracking history for a specified time period.
+
+    Args:
+        hours: Number of hours of history to retrieve (1-168 hours / 7 days, default 24)
+    """
+    return await _execute_get_track(
+        _current_db, _current_user_id,
+        {"hours": hours}
+    )
+
+
+# Places tools
+@tool
+async def search_places_tool(query: str, latitude: float = None, longitude: float = None, limit: int = 5) -> dict:
+    """Search for places, addresses, or points of interest using OpenStreetMap.
+
+    Args:
+        query: Search query (e.g., 'coffee shops', 'restaurants near me', 'Eiffel Tower')
+        latitude: Optional latitude for proximity search
+        longitude: Optional longitude for proximity search
+        limit: Maximum number of results (1-50, default 5)
+    """
+    return await _execute_search_places({
+        "query": query,
+        "latitude": latitude,
+        "longitude": longitude,
+        "limit": limit
+    })
+
+
+@tool
+async def reverse_geocode_tool(latitude: float, longitude: float) -> dict:
+    """Convert GPS coordinates to a human-readable address.
+
+    Args:
+        latitude: Latitude coordinate
+        longitude: Longitude coordinate
+    """
+    return await _execute_reverse_geocode({
+        "latitude": latitude,
+        "longitude": longitude
+    })
+
+
 def _get_llm_model(model_type: str = "gemini"):
     """Get LangChain model instance based on type."""
     if model_type == "gemini":
@@ -254,6 +347,10 @@ async def get_ai_response_stream_langchain(
     web_enabled = await _is_web_integration_active(db, chat_id)
     gmail_integration = await _get_integration(db, chat_id, "gmail")
     gmail_enabled = gmail_integration is not None and gmail_integration.credentials is not None
+    gps_integration = await _get_integration(db, chat_id, "gps")
+    gps_enabled = gps_integration is not None and gps_integration.is_active
+    places_integration = await _get_integration(db, chat_id, "osm_places")
+    places_enabled = places_integration is not None and places_integration.is_active
 
     # Get bot's enabled tools from integrations_config
     bot_enabled_tools = {}
@@ -296,6 +393,50 @@ async def get_ai_response_stream_langchain(
                 f"\n\nYou have access to the user's Gmail with these capabilities: "
                 f"{', '.join(enabled_tools_list)}. "
                 "Use these tools when the user asks about emails."
+            )
+
+    # Add GPS tools if integration is active AND bot has them enabled
+    gps_enabled_tools = bot_enabled_tools.get('gps', [])
+    if gps_enabled:
+        available_gps_tools = {
+            'get_location': get_location_tool,
+            'create_fence': create_fence_tool,
+            'subscribe_to_fence': subscribe_to_fence_tool,
+            'get_track': get_track_tool,
+        }
+
+        enabled_tools_list = []
+        for tool_id, tool_func in available_gps_tools.items():
+            if tool_id in gps_enabled_tools:
+                tools.append(tool_func)
+                enabled_tools_list.append(tool_id.replace('_', ' ').title())
+
+        if enabled_tools_list:
+            system_prompt += (
+                f"\n\nYou have access to the user's GPS location with these capabilities: "
+                f"{', '.join(enabled_tools_list)}. "
+                "Use these tools for location-based queries and geofencing."
+            )
+
+    # Add Places tools if integration is active AND bot has them enabled
+    places_enabled_tools = bot_enabled_tools.get('osm_places', [])
+    if places_enabled:
+        available_places_tools = {
+            'search_places': search_places_tool,
+            'reverse_geocode': reverse_geocode_tool,
+        }
+
+        enabled_tools_list = []
+        for tool_id, tool_func in available_places_tools.items():
+            if tool_id in places_enabled_tools:
+                tools.append(tool_func)
+                enabled_tools_list.append(tool_id.replace('_', ' ').title())
+
+        if enabled_tools_list:
+            system_prompt += (
+                f"\n\nYou have access to places search with these capabilities: "
+                f"{', '.join(enabled_tools_list)}. "
+                "Use these tools to search for places, addresses, and points of interest."
             )
 
     system_prompt += (
@@ -356,6 +497,18 @@ async def get_ai_response_stream_langchain(
                 tool_result = await gmail_search_emails_tool.ainvoke(tool_call["args"])
             elif tool_name == "gmail_send_email_tool":
                 tool_result = await gmail_send_email_tool.ainvoke(tool_call["args"])
+            elif tool_name == "get_location_tool":
+                tool_result = await get_location_tool.ainvoke(tool_call["args"])
+            elif tool_name == "create_fence_tool":
+                tool_result = await create_fence_tool.ainvoke(tool_call["args"])
+            elif tool_name == "subscribe_to_fence_tool":
+                tool_result = await subscribe_to_fence_tool.ainvoke(tool_call["args"])
+            elif tool_name == "get_track_tool":
+                tool_result = await get_track_tool.ainvoke(tool_call["args"])
+            elif tool_name == "search_places_tool":
+                tool_result = await search_places_tool.ainvoke(tool_call["args"])
+            elif tool_name == "reverse_geocode_tool":
+                tool_result = await reverse_geocode_tool.ainvoke(tool_call["args"])
 
             logger.info(f"Tool {tool_name} result: {tool_result}")
         except Exception as e:

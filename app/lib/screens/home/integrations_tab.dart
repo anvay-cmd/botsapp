@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../config/theme.dart';
+import '../../config/constants.dart';
 import '../../models/integration.dart';
 import '../../services/api_service.dart';
+import '../../services/gps_service.dart';
 
 final integrationsProvider =
     FutureProvider<List<IntegrationInfo>>((ref) async {
@@ -132,6 +135,12 @@ class IntegrationsTab extends ConsumerWidget {
                                     // Disconnect
                                     await api.delete(
                                         '/integrations/${integration.provider}');
+
+                                    // Stop GPS service if disconnecting GPS
+                                    if (integration.provider == 'gps') {
+                                      await GPSService().disableIntegration();
+                                    }
+
                                     ref.invalidate(integrationsProvider);
                                   } else {
                                     // Connect
@@ -143,6 +152,45 @@ class IntegrationsTab extends ConsumerWidget {
                                       // Simple connect
                                       await api.post(
                                           '/integrations/${integration.provider}/connect');
+
+                                      // Initialize GPS service if connecting GPS
+                                      if (integration.provider == 'gps') {
+                                        final prefs = await SharedPreferences.getInstance();
+                                        final token = prefs.getString('access_token');
+
+                                        if (token != null) {
+                                          // Initialize GPS service
+                                          await GPSService().initialize(
+                                            AppConstants.apiUrl,
+                                            token,
+                                          );
+
+                                          // Request permissions and enable tracking
+                                          final hasPermissions = await GPSService().checkPermissions();
+                                          if (hasPermissions) {
+                                            // This sets SharedPreferences and starts tracking
+                                            await GPSService().enableIntegration();
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('GPS tracking enabled'),
+                                                  backgroundColor: Colors.green,
+                                                ),
+                                              );
+                                            }
+                                          } else {
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('Location permission denied. Please enable in Settings.'),
+                                                  backgroundColor: Colors.orange,
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        }
+                                      }
+
                                       ref.invalidate(integrationsProvider);
                                     }
                                   }
@@ -318,6 +366,10 @@ class _IntegrationTile extends StatelessWidget {
         return Icons.folder;
       case 'newspaper':
         return Icons.newspaper;
+      case 'location_on':
+        return Icons.location_on;
+      case 'map':
+        return Icons.map;
       default:
         return Icons.extension;
     }

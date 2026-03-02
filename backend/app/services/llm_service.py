@@ -403,6 +403,389 @@ async def _execute_gmail_send(db: AsyncSession, chat_id: UUID, args: dict) -> di
     return result
 
 
+# GPS execution functions
+async def _execute_get_location(db: AsyncSession, user_id: UUID, chat_id: UUID = None) -> dict:
+    """Get user's current/most recent location.
+
+    This is a HYBRID tool that:
+    1. First tries to get recent location from database (works in background)
+    2. If no recent data, requests real-time location from client (only works when app is open)
+    """
+    from app.models.geofence import LocationTracking
+    from sqlalchemy import desc
+    from datetime import datetime, timedelta
+
+    try:
+        # Try to get recent location from database (< 10 minutes old)
+        result = await db.execute(
+            select(LocationTracking)
+            .where(LocationTracking.user_id == user_id)
+            .order_by(desc(LocationTracking.timestamp))
+            .limit(1)
+        )
+        location = result.scalar_one_or_none()
+
+        if location:
+            age = datetime.utcnow() - location.timestamp
+
+            # If location is recent enough (< 10 minutes), use it
+            if age < timedelta(minutes=10):
+                age_str = ""
+                if age.total_seconds() < 60:
+                    age_str = "just now"
+                elif age.total_seconds() < 3600:
+                    age_str = f"{int(age.total_seconds() / 60)} minutes ago"
+                else:
+                    age_str = f"{int(age.total_seconds() / 3600)} hours ago"
+
+                return {
+                    "success": True,
+                    "latitude": location.latitude,
+                    "longitude": location.longitude,
+                    "accuracy": location.accuracy,
+                    "timestamp": age_str,
+                    "source": "database",
+                }
+
+        # No recent location - need to request from client
+        # This requires websocket communication (client-side execution)
+        # Return a special response that triggers client location request
+        return {
+            "success": False,
+            "error": "No recent location data. Please ensure GPS tracking is enabled in the app.",
+            "needs_client_location": True,
+            "chat_id": str(chat_id) if chat_id else None,
+        }
+
+    except Exception as e:
+        logger.error(f"Get location error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def _execute_create_fence(db: AsyncSession, user_id: UUID, args: dict) -> dict:
+    """Create a new geofence."""
+    from app.models.geofence import Geofence
+    from sqlalchemy import and_
+
+    try:
+        name = args.get("name", "")
+        latitude = args.get("latitude")
+        longitude = args.get("longitude")
+        radius = args.get("radius", 100)
+
+        if not name or latitude is None or longitude is None:
+            return {"success": False, "error": "Missing required fields"}
+
+        # Validate inputs
+        if not (-90 <= latitude <= 90):
+            return {"success": False, "error": "Invalid latitude. Must be between -90 and 90."}
+        if not (-180 <= longitude <= 180):
+            return {"success": False, "error": "Invalid longitude. Must be between -180 and 180."}
+        if radius < 10 or radius > 10000:
+            return {"success": False, "error": "Invalid radius. Must be between 10 and 10000 meters."}
+
+        # Check if fence exists
+        result = await db.execute(
+            select(Geofence).where(
+                and_(
+                    Geofence.user_id == user_id,
+                    Geofence.name == name,
+                    Geofence.is_active == True
+                )
+            )
+        )
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            return {"success": False, "error": f"A geofence named '{name}' already exists."}
+
+        # Create fence
+        fence = Geofence(
+            user_id=user_id,
+            name=name,
+            latitude=latitude,
+            longitude=longitude,
+            radius=radius
+        )
+        db.add(fence)
+        await db.commit()
+        await db.refresh(fence)
+
+        return {
+            "success": True,
+            "fence_id": str(fence.id),
+            "name": name,
+            "message": f"Geofence '{name}' created successfully!"
+        }
+    except Exception as e:
+        logger.error(f"Create fence error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def _execute_subscribe_to_fence(db: AsyncSession, user_id: UUID, chat_id: UUID, args: dict) -> dict:
+    """Subscribe to geofence events."""
+    from app.models.geofence import Geofence, GeofenceSubscription
+    from sqlalchemy import and_
+
+    try:
+        fence_name = args.get("fence_name", "")
+        event_type = args.get("event_type", "enter")
+
+        if not fence_name:
+            return {"success": False, "error": "Missing fence_name"}
+
+        # Validate event type
+        valid_events = {"enter", "exit", "dwell"}
+        if event_type not in valid_events:
+            return {"success": False, "error": f"Invalid event type. Must be one of: {', '.join(valid_events)}"}
+
+        # Find the geofence
+        result = await db.execute(
+            select(Geofence).where(
+                and_(
+                    Geofence.user_id == user_id,
+                    Geofence.name == fence_name,
+                    Geofence.is_active == True
+                )
+            )
+        )
+        fence = result.scalar_one_or_none()
+
+        if not fence:
+            return {"success": False, "error": f"Geofence '{fence_name}' not found."}
+
+        # Check if subscription exists
+        result = await db.execute(
+            select(GeofenceSubscription).where(
+                and_(
+                    GeofenceSubscription.fence_id == fence.id,
+                    GeofenceSubscription.chat_id == chat_id,
+                    GeofenceSubscription.event_type == event_type
+                )
+            )
+        )
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            return {"success": False, "error": f"Already subscribed to '{event_type}' events for '{fence_name}'."}
+
+        # Create subscription
+        subscription = GeofenceSubscription(
+            fence_id=fence.id,
+            chat_id=chat_id,
+            event_type=event_type
+        )
+        db.add(subscription)
+        await db.commit()
+
+        return {
+            "success": True,
+            "message": f"Successfully subscribed to '{event_type}' events for geofence '{fence_name}'."
+        }
+    except Exception as e:
+        logger.error(f"Subscribe to fence error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def _execute_get_track(db: AsyncSession, user_id: UUID, args: dict) -> dict:
+    """Get location tracking history."""
+    from app.models.geofence import LocationTracking
+    from sqlalchemy import and_
+    from datetime import timedelta
+    import math
+
+    try:
+        hours = args.get("hours", 24)
+
+        # Validate hours
+        if hours < 1 or hours > 168:
+            return {"success": False, "error": "Invalid time range. Must be between 1 and 168 hours (7 days)."}
+
+        # Calculate start time
+        from datetime import datetime
+        start_time = datetime.utcnow() - timedelta(hours=hours)
+
+        # Get location history
+        result = await db.execute(
+            select(LocationTracking)
+            .where(
+                and_(
+                    LocationTracking.user_id == user_id,
+                    LocationTracking.timestamp >= start_time
+                )
+            )
+            .order_by(LocationTracking.timestamp)
+        )
+        locations = result.scalars().all()
+
+        if not locations:
+            return {"success": False, "error": f"No location data available for the past {hours} hour(s)."}
+
+        # Calculate total distance
+        def haversine_distance(lat1, lon1, lat2, lon2):
+            R = 6371000  # Earth radius in meters
+            phi1 = math.radians(lat1)
+            phi2 = math.radians(lat2)
+            delta_phi = math.radians(lat2 - lat1)
+            delta_lambda = math.radians(lon2 - lon1)
+            a = (math.sin(delta_phi / 2) ** 2 +
+                 math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2)
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            return R * c
+
+        total_distance = 0
+        for i in range(1, len(locations)):
+            total_distance += haversine_distance(
+                locations[i-1].latitude, locations[i-1].longitude,
+                locations[i].latitude, locations[i].longitude
+            )
+
+        return {
+            "success": True,
+            "total_points": len(locations),
+            "start_time": locations[0].timestamp.strftime('%Y-%m-%d %H:%M'),
+            "end_time": locations[-1].timestamp.strftime('%Y-%m-%d %H:%M'),
+            "distance_km": round(total_distance / 1000, 2),
+            "first_location": {
+                "latitude": locations[0].latitude,
+                "longitude": locations[0].longitude
+            },
+            "last_location": {
+                "latitude": locations[-1].latitude,
+                "longitude": locations[-1].longitude
+            }
+        }
+    except Exception as e:
+        logger.error(f"Get track error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# Places execution functions
+async def _execute_search_places(args: dict) -> dict:
+    """Search for places using OpenStreetMap."""
+    import httpx
+
+    try:
+        query = args.get("query", "")
+        latitude = args.get("latitude")
+        longitude = args.get("longitude")
+        limit = min(args.get("limit", 5), 50)
+
+        if not query:
+            return {"success": False, "error": "Missing query"}
+
+        # Build request parameters
+        params = {
+            "q": query,
+            "format": "json",
+            "limit": limit,
+            "addressdetails": 1,
+        }
+
+        # Add proximity if coordinates provided
+        if latitude is not None and longitude is not None:
+            if not (-90 <= latitude <= 90):
+                return {"success": False, "error": "Invalid latitude"}
+            if not (-180 <= longitude <= 180):
+                return {"success": False, "error": "Invalid longitude"}
+            params["viewbox"] = f"{longitude-0.1},{latitude-0.1},{longitude+0.1},{latitude+0.1}"
+            params["bounded"] = 0
+
+        # Call Nominatim API
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params=params,
+                headers={"User-Agent": "BotsApp/1.0 (AI assistant app)"}
+            )
+            response.raise_for_status()
+            results = response.json()
+
+        if not results:
+            return {"success": False, "error": f"No places found for '{query}'."}
+
+        # Format results
+        places = []
+        for place in results:
+            places.append({
+                "name": place.get("display_name", "Unknown"),
+                "latitude": place.get("lat"),
+                "longitude": place.get("lon"),
+                "type": place.get("type", "").replace("_", " ").title(),
+                "category": place.get("class", "").replace("_", " ").title(),
+            })
+
+        return {"success": True, "places": places, "count": len(places)}
+    except httpx.HTTPError as e:
+        logger.error(f"Search places HTTP error: {e}")
+        return {"success": False, "error": f"Network error: {str(e)}"}
+    except Exception as e:
+        logger.error(f"Search places error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def _execute_reverse_geocode(args: dict) -> dict:
+    """Convert coordinates to address using OpenStreetMap."""
+    import httpx
+
+    try:
+        latitude = args.get("latitude")
+        longitude = args.get("longitude")
+
+        if latitude is None or longitude is None:
+            return {"success": False, "error": "Missing latitude or longitude"}
+
+        # Validate coordinates
+        if not (-90 <= latitude <= 90):
+            return {"success": False, "error": "Invalid latitude"}
+        if not (-180 <= longitude <= 180):
+            return {"success": False, "error": "Invalid longitude"}
+
+        # Build request parameters
+        params = {
+            "lat": latitude,
+            "lon": longitude,
+            "format": "json",
+            "addressdetails": 1,
+            "zoom": 18
+        }
+
+        # Call Nominatim API
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params=params,
+                headers={"User-Agent": "BotsApp/1.0 (AI assistant app)"}
+            )
+            response.raise_for_status()
+            result = response.json()
+
+        if "error" in result:
+            return {"success": False, "error": f"No address found for coordinates {latitude}, {longitude}"}
+
+        # Extract address components
+        address = result.get("address", {})
+
+        return {
+            "success": True,
+            "display_name": result.get("display_name", "Unknown location"),
+            "street": f"{address.get('house_number', '')} {address.get('road', '')}".strip() or None,
+            "city": address.get("city") or address.get("town") or address.get("village"),
+            "county": address.get("county"),
+            "state": address.get("state"),
+            "postcode": address.get("postcode"),
+            "country": address.get("country"),
+            "place_type": result.get("type", "").replace("_", " ").title(),
+            "category": result.get("class", "").replace("_", " ").title(),
+        }
+    except httpx.HTTPError as e:
+        logger.error(f"Reverse geocode HTTP error: {e}")
+        return {"success": False, "error": f"Network error: {str(e)}"}
+    except Exception as e:
+        logger.error(f"Reverse geocode error: {e}")
+        return {"success": False, "error": str(e)}
+
+
 async def _execute_function_call(
     db: AsyncSession, chat_id: UUID, user_id: UUID, fc: types.FunctionCall
 ) -> dict:

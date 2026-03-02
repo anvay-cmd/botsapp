@@ -34,6 +34,20 @@ AVAILABLE_INTEGRATIONS = [
         "icon": "email",
         "requires_oauth": True,
     },
+    {
+        "provider": "gps",
+        "name": "GPS & Location",
+        "description": "Location tracking, geofencing, and location history",
+        "icon": "location_on",
+        "requires_oauth": False,
+    },
+    {
+        "provider": "osm_places",
+        "name": "Places & Maps",
+        "description": "Search places and points of interest using OpenStreetMap",
+        "icon": "map",
+        "requires_oauth": False,
+    },
 ]
 
 

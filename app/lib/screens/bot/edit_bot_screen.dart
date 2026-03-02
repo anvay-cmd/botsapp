@@ -575,6 +575,18 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
           {'id': 'gmail_send_email', 'label': 'Send Email'},
           {'id': 'gmail_read_email', 'label': 'Read Email'},
         ];
+      case 'gps':
+        return [
+          {'id': 'get_location', 'label': 'Get Location'},
+          {'id': 'create_fence', 'label': 'Create Geofence'},
+          {'id': 'subscribe_to_fence', 'label': 'Subscribe to Fence'},
+          {'id': 'get_track', 'label': 'Get Location History'},
+        ];
+      case 'osm_places':
+        return [
+          {'id': 'search_places', 'label': 'Search Places'},
+          {'id': 'reverse_geocode', 'label': 'Reverse Geocode'},
+        ];
       default:
         return [];
     }

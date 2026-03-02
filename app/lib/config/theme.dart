@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
-  static const Color primaryGreen = Color(0xFF075E54);
-  static const Color darkGreen = Color(0xFF054D44);
-  static const Color lightGreen = Color(0xFF25D366);
-  static const Color tealGreen = Color(0xFF128C7E);
-  static const Color chatBubbleUser = Color(0xFFDCF8C6);
-  static const Color chatBubbleBot = Colors.white;
-  static const Color chatBackground = Color(0xFFECE5DD);
-  static const Color darkBackground = Color(0xFF050505);
-  static const Color darkSurface = Color(0xFF1F2C34);
-  static const Color darkChatBubbleUser = Color(0xFF005C4B);
-  static const Color darkChatBubbleBot = Color(0xFF202C33);
-  static const Color darkChatBackground = Color(0xFF0B141A);
+  static const Color primaryGreen = Color(0xFF3872e9);
+  static const Color darkGreen = Color(0xFF2855b8);
+  static const Color lightGreen = Color(0xFF6ba3ff);
+  static const Color tealGreen = Color(0xFF5090ff);
+  static const Color chatBubbleUser = Color(0xFF3872e9);
+  static const Color chatBubbleBot = Color(0xFFD0D0D0);
+  static const Color chatBackground = Color(0xFFFFFFFF);
+  static const Color darkBackground = Color(0xFF000000);
+  static const Color darkSurface = Color(0xFF1C1C1E);
+  static const Color darkChatBubbleUser = Color(0xFF3872e9);
+  static const Color darkChatBubbleBot = Color(0xFF1E1E1E);
+  static const Color darkChatBackground = Color(0xFF020202);
 
   static ThemeData get lightTheme => ThemeData(
         useMaterial3: true,

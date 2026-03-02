@@ -3,12 +3,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../config/theme.dart';
+import '../../config/constants.dart';
 import '../../services/callkit_bridge_service.dart';
+import '../../services/gps_service.dart';
+import '../../services/api_service.dart';
 import 'chats_tab.dart';
 import 'integrations_tab.dart';
-import 'schedules_tab.dart';
+import 'activities_tab.dart';
 import 'settings_tab.dart';
 
 final bottomNavIndexProvider = StateProvider<int>((ref) => 0);
@@ -28,7 +32,35 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (!mounted) return;
       CallKitBridgeService.instance.tryConsumePendingIncomingCall();
       unawaited(CallKitBridgeService.instance.syncPushTokens());
+      unawaited(_initializeGPSIfEnabled());
     });
+  }
+
+  Future<void> _initializeGPSIfEnabled() async {
+    try {
+      // Check if GPS integration is enabled
+      final api = ApiService();
+      final response = await api.get('/integrations');
+      final integrations = response.data as List;
+
+      final gpsIntegration = integrations.firstWhere(
+        (i) => i['provider'] == 'gps',
+        orElse: () => null,
+      );
+
+      if (gpsIntegration != null && gpsIntegration['is_connected'] == true) {
+        final prefs = await SharedPreferences.getInstance();
+        final token = prefs.getString('access_token');
+
+        if (token != null) {
+          // Initialize GPS service (this will auto-start if enabled in prefs)
+          await GPSService().initialize(AppConstants.apiUrl, token);
+        }
+      }
+    } catch (e) {
+      // Silently fail - GPS is optional
+      debugPrint('Failed to initialize GPS: $e');
+    }
   }
 
   @override
@@ -39,7 +71,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final tabs = [
       const ChatsTab(),
       const IntegrationsTab(),
-      const SchedulesTab(),
+      const ActivitiesTab(),
       const SettingsTab(),
     ];
 
@@ -83,9 +115,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 label: 'Integrations',
               ),
               NavigationDestination(
-                icon: Icon(Icons.schedule_outlined),
-                selectedIcon: Icon(Icons.schedule),
-                label: 'Schedules',
+                icon: Icon(Icons.notifications_outlined),
+                selectedIcon: Icon(Icons.notifications),
+                label: 'Activities',
               ),
               NavigationDestination(
                 icon: Icon(Icons.settings_outlined),

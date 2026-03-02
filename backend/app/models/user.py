@@ -23,3 +23,5 @@ class User(Base):
     bots = relationship("Bot", back_populates="creator", lazy="selectin")
     chats = relationship("Chat", back_populates="user", lazy="selectin")
     integrations = relationship("Integration", back_populates="user", lazy="selectin")
+    geofences = relationship("Geofence", back_populates="user", lazy="selectin")
+    location_tracks = relationship("LocationTracking", back_populates="user", lazy="selectin")

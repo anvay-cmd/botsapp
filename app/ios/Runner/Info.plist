@@ -61,6 +61,12 @@
 	<string>BotsApp needs microphone access for voice calls with bots</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>BotsApp needs photo library access to share images in chat</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>BotsApp needs your location to provide location-based services and geofence alerts</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>BotsApp needs your location in the background to track movement and send geofence alerts when you enter or leave specific areas</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>BotsApp needs your location in the background to send you geofence alerts</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -91,6 +97,7 @@
 		<string>processing</string>
 		<string>remote-notification</string>
 		<string>fetch</string>
+		<string>location</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

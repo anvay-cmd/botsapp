@@ -62,15 +62,13 @@ class ChatBubble extends StatelessWidget {
           style: TextStyle(
             fontSize: 10,
             color: isUser
-                ? (isDark
-                    ? Colors.white.withValues(alpha: 0.55)
-                    : Colors.black.withValues(alpha: 0.45))
+                ? Colors.white.withValues(alpha: 0.55)
                 : (isDark ? Colors.grey.shade500 : Colors.grey.shade500),
           ),
         ),
         if (isUser) ...[
           const SizedBox(width: 3),
-          Icon(Icons.done_all, size: 13, color: AppTheme.tealGreen),
+          Icon(Icons.done_all, size: 13, color: Colors.white.withValues(alpha: 0.65)),
         ],
         if (isStreaming) ...[
           const SizedBox(width: 4),
@@ -139,9 +137,7 @@ class ChatBubble extends StatelessWidget {
                                 style: TextStyle(
                                   fontSize: 14.5,
                                   height: 1.25,
-                                  color: isDark
-                                      ? Colors.white.withValues(alpha: 0.92)
-                                      : Colors.black.withValues(alpha: 0.87),
+                                  color: Colors.white.withValues(alpha: 0.92),
                                 ),
                                 children: [
                                   WidgetSpan(
@@ -251,6 +247,10 @@ class _VoiceCallBubble extends StatelessWidget {
 
     final isOutgoing = isUser;
     final iconColor = isOutgoing ? Colors.green : Colors.red;
+    final displayIconColor = isUser ? Colors.white : iconColor;
+    final displayBgColor = isUser
+        ? Colors.white.withValues(alpha: 0.2)
+        : iconColor.withValues(alpha: 0.15);
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -287,13 +287,13 @@ class _VoiceCallBubble extends StatelessWidget {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: iconColor.withValues(alpha: 0.15),
+                  color: displayBgColor,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   Icons.call,
                   size: 18,
-                  color: iconColor,
+                  color: displayIconColor,
                 ),
               ),
               const SizedBox(width: 10),
@@ -306,7 +306,9 @@ class _VoiceCallBubble extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: isDark ? Colors.white : Colors.black87,
+                        color: isUser
+                            ? Colors.white
+                            : (isDark ? Colors.white : Colors.black87),
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -316,7 +318,9 @@ class _VoiceCallBubble extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 12,
-                        color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                        color: isUser
+                            ? Colors.white.withValues(alpha: 0.7)
+                            : (isDark ? Colors.grey.shade400 : Colors.grey.shade600),
                       ),
                     ),
                     if (parsed.transcript.isNotEmpty) ...[
@@ -325,7 +329,9 @@ class _VoiceCallBubble extends StatelessWidget {
                         'Tap to view transcript',
                         style: TextStyle(
                           fontSize: 11,
-                          color: AppTheme.tealGreen.withValues(alpha: 0.95),
+                          color: isUser
+                              ? Colors.white.withValues(alpha: 0.85)
+                              : AppTheme.tealGreen.withValues(alpha: 0.95),
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -338,12 +344,14 @@ class _VoiceCallBubble extends StatelessWidget {
                 timeStr,
                 style: TextStyle(
                   fontSize: 11,
-                  color: isDark ? Colors.grey.shade500 : Colors.grey.shade500,
+                  color: isUser
+                      ? Colors.white.withValues(alpha: 0.55)
+                      : (isDark ? Colors.grey.shade500 : Colors.grey.shade500),
                 ),
               ),
               if (isUser) ...[
                 const SizedBox(width: 3),
-                Icon(Icons.done_all, size: 14, color: AppTheme.tealGreen),
+                Icon(Icons.done_all, size: 14, color: Colors.white.withValues(alpha: 0.65)),
               ],
             ],
           ),
@@ -584,6 +592,34 @@ class _ToolCallBubble extends StatelessWidget {
         case 'cancel_schedule':
           final keyword = args['keyword'] ?? '';
           return 'Canceling scheduled call${keyword.isNotEmpty ? ' ($keyword)' : ''}';
+
+        // GPS tools
+        case 'get_location':
+          return 'Getting your current location...';
+
+        case 'create_fence':
+          final name = args['name'] ?? '';
+          final radius = args['radius'] ?? 100;
+          return 'Creating geofence${name.isNotEmpty ? ' "$name"' : ''} (${radius}m radius)';
+
+        case 'subscribe_to_fence':
+          final fenceName = args['fence_name'] ?? '';
+          final eventType = args['event_type'] ?? 'enter';
+          return 'Setting up alert for ${eventType}ing${fenceName.isNotEmpty ? ' "$fenceName"' : ''}';
+
+        case 'get_track':
+          final hours = args['hours'] ?? 24;
+          return 'Retrieving location history (past $hours hours)';
+
+        // Places tools
+        case 'search_places':
+          final query = args['query'] ?? '';
+          return 'Searching for places${query.isNotEmpty ? ': "$query"' : ''}';
+
+        case 'reverse_geocode':
+          final lat = args['latitude'] ?? '';
+          final lon = args['longitude'] ?? '';
+          return 'Looking up address for location ($lat, $lon)';
 
         default:
           // Format any args
