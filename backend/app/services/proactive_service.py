@@ -169,11 +169,15 @@ async def gmail_send_email_tool(to: str, subject: str, body: str) -> dict:
 async def send_message_tool(message: str) -> dict:
     """Send a message to the user in the main conversation.
 
-    IMPORTANT: Only use this if you have something truly important to tell the user.
-    Do NOT use this for routine checks or if nothing significant was found.
+    CRITICAL: This is for URGENT/IMPORTANT information ONLY!
+    - The user did NOT ask you to check on anything
+    - Do NOT use this to report "I checked" or "nothing new"
+    - Do NOT use this for routine status updates
+    - ONLY use this if you found something truly important that requires immediate user attention
+    - If nothing important was found, do NOT call this tool at all
 
     Args:
-        message: The message to send to the user
+        message: The urgent/important message to send to the user
     """
     global _current_bot, _current_chat_id, _current_state
 
@@ -228,7 +232,7 @@ def _get_max_messages(bot: Bot) -> int:
 def _get_proactivity_prompt(bot: Bot) -> str:
     """Get custom proactivity prompt."""
     cfg = bot.integrations_config or {}
-    return cfg.get("proactivity_prompt") or "Check if anything has changed since last check and message the user only if needed."
+    return cfg.get("proactivity_prompt") or "Check for truly important or urgent updates. Only message the user if something critical requires their attention."
 
 
 def _job_id(bot_id: UUID) -> str:
@@ -330,20 +334,35 @@ async def _process_proactive_chat(db, bot: Bot, chat: Chat, max_messages: int, p
 
     # Build system prompt with context
     now_ist = datetime.now(IST).strftime("%A, %d %B %Y, %I:%M %p IST")
-    system_prompt = f"""{bot.system_prompt}
+    system_prompt = f"""Current date and time: {now_ist}
 
-Current date and time: {now_ist}
+=== PROACTIVE BACKGROUND CHECK MODE ===
+You are running an AUTONOMOUS background check. The user did NOT ask you to do this.
 
-=== PROACTIVE CHECK MODE ===
-You are running a proactive check based on this instruction:
-"{proactivity_prompt}"
+Context about your role: {bot.system_prompt}
 
-Your task:
-1. Use available tools to gather information (check emails, search web, etc.)
-2. Think step-by-step about whether the user should be notified
-3. ONLY use send_message_tool if you find something truly important
+Your specific task: "{proactivity_prompt}"
 
-Remember: The user did NOT ask for this. Only interrupt them if it's worth it.
+CRITICAL RULES:
+1. Use available tools to silently gather information (emails, web search, etc.)
+2. Think carefully: Is there something URGENT, IMPORTANT, or ACTIONABLE that the user NEEDS to know RIGHT NOW?
+3. DO NOT send status updates like "I just checked" or "Nothing new" or "Everything is the same"
+4. DO NOT send messages just to report that you completed the check
+5. DO NOT respond conversationally - this is not a chat
+6. ONLY use send_message_tool if you found something that truly matters and requires immediate user attention
+
+If nothing important was found:
+- Think about it in your reasoning
+- Do NOT call send_message_tool at all
+- The check will complete silently in the background
+
+If something important WAS found:
+- Use send_message_tool ONCE with the critical information
+- Be concise and actionable
+- Don't say "I checked" or mention this was a proactive check
+- Just share the important information directly
+
+The user should ONLY hear from you when something truly matters. Silence is golden.
 """
 
     # Build tools list - ALWAYS include send_message_tool and call tools

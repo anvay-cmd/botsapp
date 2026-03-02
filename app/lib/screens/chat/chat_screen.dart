@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import '../../config/constants.dart';
 import '../../config/theme.dart';
 import '../../providers/bot_provider.dart';
 import '../../providers/chat_provider.dart';
+import '../../providers/lifecycle_provider.dart';
 import '../../widgets/chat_bubble.dart';
 import '../../widgets/message_input.dart';
 
@@ -33,6 +35,8 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _scrollController = ScrollController();
   bool _didClearActiveChat = false;
+  bool _isHeartbeatMode = false;
+  Timer? _heartbeatTimer;
 
   @override
   void initState() {
@@ -62,6 +66,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           curve: Curves.easeOut,
         );
       });
+    }
+  }
+
+  void _toggleHeartbeatMode() {
+    setState(() {
+      _isHeartbeatMode = !_isHeartbeatMode;
+    });
+
+    if (_isHeartbeatMode) {
+      // Load lifecycle messages initially
+      ref.read(lifecycleMessagesProvider(widget.chatId).notifier).loadMessages();
+      // Start polling every 3 seconds
+      _heartbeatTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+        if (mounted) {
+          ref.read(lifecycleMessagesProvider(widget.chatId).notifier).loadMessages();
+        }
+      });
+    } else {
+      // Stop polling
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = null;
     }
   }
 
@@ -152,6 +177,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               },
             ),
           ),
+          IconButton(
+            icon: Icon(
+              Icons.monitor_heart,
+              color: _isHeartbeatMode ? AppTheme.tealGreen : null,
+            ),
+            onPressed: _toggleHeartbeatMode,
+            tooltip: 'Proactive Messages',
+          ),
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'delete_bot') _confirmDeleteBot();
@@ -177,7 +210,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         child: Column(
           children: [
             Expanded(
-              child: chatState.isLoading && chatState.messages.isEmpty
+              child: _isHeartbeatMode
+                ? _buildProactiveView()
+                : chatState.isLoading && chatState.messages.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : ListView.builder(
                       controller: _scrollController,
@@ -211,23 +246,188 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       },
                     ),
             ),
-            MessageInput(
-              onSend: (content, {String? contentType, String? attachmentUrl}) {
-                ref
-                    .read(chatMessagesProvider(widget.chatId).notifier)
-                    .sendMessage(
-                      content,
-                      contentType: contentType ?? 'text',
-                      attachmentUrl: attachmentUrl,
-                    );
-                ref
-                    .read(chatListProvider.notifier)
-                    .updateLastMessage(widget.chatId, content);
-              },
-            ),
+            if (!_isHeartbeatMode)
+              MessageInput(
+                onSend: (content, {String? contentType, String? attachmentUrl}) {
+                  ref
+                      .read(chatMessagesProvider(widget.chatId).notifier)
+                      .sendMessage(
+                        content,
+                        contentType: contentType ?? 'text',
+                        attachmentUrl: attachmentUrl,
+                      );
+                  ref
+                      .read(chatListProvider.notifier)
+                      .updateLastMessage(widget.chatId, content);
+                },
+              ),
           ],
         ),
       ),
+      ),
+    );
+  }
+
+  Widget _buildProactiveView() {
+    final lifecycleState = ref.watch(lifecycleMessagesProvider(widget.chatId));
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    if (lifecycleState.isLoading && lifecycleState.messages.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (lifecycleState.messages.isEmpty) {
+      return const Center(
+        child: Text('No proactive conversations yet'),
+      );
+    }
+
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      itemCount: lifecycleState.messages.length,
+      itemBuilder: (context, index) {
+        final message = lifecycleState.messages[index];
+
+        // Display user prompts as system prompts
+        final isSystemMessage = message.role == 'user' ||
+                                message.role == 'system' ||
+                                message.contentType == 'system_prompt';
+
+        if (isSystemMessage) {
+          return Container(
+            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? Colors.blue.withValues(alpha: 0.2)
+                  : Colors.blue.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.blue.withValues(alpha: 0.3),
+                width: 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: Colors.blue.shade700,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'System Prompt',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue.shade700,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      'Session ${message.sessionId}',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.blue.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message.content,
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
+          );
+        }
+
+        // Tool result - format JSON nicely
+        if (message.contentType == 'tool_result') {
+          return _buildToolResultBubble(message, isDark);
+        }
+
+        // Tool call or regular assistant message
+        return ChatBubble(
+          content: message.content,
+          isUser: false,
+          timestamp: message.createdAt,
+          contentType: message.contentType,
+        );
+      },
+    );
+  }
+
+  Widget _buildToolResultBubble(dynamic message, bool isDark) {
+    String displayText = message.content;
+
+    try {
+      final parsed = json.decode(message.content);
+      if (parsed is Map) {
+        // Format JSON nicely
+        final buffer = StringBuffer();
+        parsed.forEach((key, value) {
+          if (key == 'success' || key == 'error') return;
+
+          if (value is List) {
+            buffer.writeln('$key:');
+            for (var item in value) {
+              if (item is Map) {
+                item.forEach((k, v) {
+                  buffer.writeln('  • $k: $v');
+                });
+              } else {
+                buffer.writeln('  • $item');
+              }
+            }
+          } else if (value is Map) {
+            buffer.writeln('$key:');
+            value.forEach((k, v) {
+              buffer.writeln('  • $k: $v');
+            });
+          } else {
+            buffer.writeln('$key: $value');
+          }
+        });
+
+        if (buffer.isNotEmpty) {
+          displayText = buffer.toString().trim();
+        } else if (parsed['success'] == true) {
+          displayText = '✓ Success';
+        } else if (parsed['error'] != null) {
+          displayText = '✗ Error: ${parsed['error']}';
+        }
+      }
+    } catch (e) {
+      // If parsing fails, use original content
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, right: 48, top: 2, bottom: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.arrow_forward,
+            size: 14,
+            color: isDark ? Colors.green.shade400 : Colors.green.shade600,
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              displayText,
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.grey.shade400 : Colors.grey.shade700,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -276,6 +476,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _heartbeatTimer?.cancel();
     super.dispose();
   }
 }

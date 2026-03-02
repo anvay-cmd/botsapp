@@ -21,6 +21,7 @@ class EditBotScreen extends ConsumerStatefulWidget {
 class _EditBotScreenState extends ConsumerState<EditBotScreen> {
   late final TextEditingController _nameController;
   late final TextEditingController _systemPromptController;
+  late final TextEditingController _proactivityPromptController;
   bool _isSaving = false;
   bool _isDeleting = false;
   bool _isGeneratingImage = false;
@@ -28,6 +29,7 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
   String? _avatarUrl;
   late String _voiceName;
   late int _proactiveMinutes;
+  late int _proactiveMaxMessages;
   late Map<String, List<String>> _selectedTools;
 
   static const List<Map<String, dynamic>> _proactiveOptions = [
@@ -50,6 +52,16 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
     _voiceName = widget.bot.voiceName;
     _proactiveMinutes = widget.bot.proactiveMinutes ?? 0;
 
+    // Initialize proactive config from integrations_config
+    final config = widget.bot.integrationsConfig ?? {};
+    _proactiveMaxMessages = config['proactive_max_messages'] is int
+        ? config['proactive_max_messages']
+        : (int.tryParse(config['proactive_max_messages']?.toString() ?? '') ?? 5);
+    _proactivityPromptController = TextEditingController(
+      text: config['proactivity_prompt']?.toString() ??
+            'Check for truly important or urgent updates. Only message the user if something critical requires their attention.',
+    );
+
     // Initialize selected tools from bot's integrations_config
     _selectedTools = {};
     if (widget.bot.integrationsConfig != null) {
@@ -66,6 +78,7 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
     _nameController.dispose();
     _systemPromptController.dispose();
     _imagePromptController.dispose();
+    _proactivityPromptController.dispose();
     super.dispose();
   }
 
@@ -343,6 +356,101 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
                   ),
                   const SizedBox(height: 12),
 
+                  if (_proactiveMinutes > 0) ...[
+                    _SectionCard(
+                      isDark: isDark,
+                      cardColor: cardColor,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(left: 4, bottom: 8),
+                          child: Row(
+                            children: [
+                              Icon(Icons.numbers_outlined,
+                                  size: 20, color: AppTheme.tealGreen),
+                              const SizedBox(width: 14),
+                              Text(
+                                'Max proactive messages',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: isDark
+                                      ? Colors.grey.shade300
+                                      : Colors.grey.shade700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 4),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Slider(
+                                value: _proactiveMaxMessages.toDouble(),
+                                min: 1,
+                                max: 20,
+                                divisions: 19,
+                                label: '$_proactiveMaxMessages messages',
+                                activeColor: AppTheme.tealGreen,
+                                onChanged: (value) {
+                                  setState(() {
+                                    _proactiveMaxMessages = value.toInt();
+                                  });
+                                },
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.only(left: 10),
+                                child: Text(
+                                  'Bot can send up to $_proactiveMaxMessages proactive messages before requiring a user response',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: subtleText,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _SectionCard(
+                      isDark: isDark,
+                      cardColor: cardColor,
+                      children: [
+                        _FieldRow(
+                          icon: Icons.edit_note_outlined,
+                          label: 'Proactivity Prompt',
+                          isDark: isDark,
+                          child: TextField(
+                            controller: _proactivityPromptController,
+                            maxLines: 3,
+                            minLines: 2,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: isDark ? Colors.white : Colors.black87,
+                            ),
+                            decoration: const InputDecoration(
+                              border: InputBorder.none,
+                              isDense: true,
+                              contentPadding: EdgeInsets.zero,
+                              hintText: 'What should the bot do during proactive checks?',
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 38, top: 4, bottom: 4),
+                          child: Text(
+                            'This prompt tells the bot what to check for and when to message you',
+                            style: TextStyle(fontSize: 11, color: subtleText),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+
                   _buildIntegrationsSection(isDark, cardColor, subtleText),
                   const SizedBox(height: 24),
 
@@ -602,13 +710,19 @@ class _EditBotScreenState extends ConsumerState<EditBotScreen> {
     }
 
     setState(() => _isSaving = true);
+
+    // Build integrations config with proactive settings
+    final config = Map<String, dynamic>.from(_selectedTools);
+    config['proactive_max_messages'] = _proactiveMaxMessages;
+    config['proactivity_prompt'] = _proactivityPromptController.text.trim();
+
     final updated = await ref.read(botListProvider.notifier).updateBot(
           botId: widget.bot.id,
           name: name,
           systemPrompt: _systemPromptController.text.trim(),
           voiceName: _voiceName,
           proactiveMinutes: _proactiveMinutes,
-          integrationsConfig: _selectedTools,
+          integrationsConfig: config,
         );
 
     if (updated != null && mounted) {
