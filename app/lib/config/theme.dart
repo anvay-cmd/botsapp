@@ -6,7 +6,7 @@ class AppTheme {
   static const Color lightGreen = Color(0xFF6ba3ff);
   static const Color tealGreen = Color(0xFF5090ff);
   static const Color chatBubbleUser = Color(0xFF3872e9);
-  static const Color chatBubbleBot = Color(0xFFD0D0D0);
+  static const Color chatBubbleBot = Color(0xFFF5F5F5);
   static const Color chatBackground = Color(0xFFFFFFFF);
   static const Color darkBackground = Color(0xFF000000);
   static const Color darkSurface = Color(0xFF1C1C1E);

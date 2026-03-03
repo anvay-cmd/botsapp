@@ -31,6 +31,8 @@ dependencies:
   geolocator: ^13.0.2
   flutter_local_notifications: ^18.0.1
   workmanager: ^0.5.2
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
 
 dev_dependencies:
   flutter_test:

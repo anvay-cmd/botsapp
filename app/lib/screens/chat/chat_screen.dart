@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -8,11 +7,27 @@ import 'package:go_router/go_router.dart';
 
 import '../../config/constants.dart';
 import '../../config/theme.dart';
+import '../../models/message.dart';
 import '../../providers/bot_provider.dart';
-import '../../providers/chat_provider.dart';
+import '../../providers/chat_provider.dart' show ChatListProvider, chatListProvider, activeChatIdProvider, ChatMessagesProvider, chatMessagesProvider, ChatMessagesState, MessageBubble;
 import '../../providers/lifecycle_provider.dart';
 import '../../widgets/chat_bubble.dart';
+import '../../widgets/heartbeat_icon.dart';
 import '../../widgets/message_input.dart';
+
+class _ToolCallGroup {
+  final dynamic firstCall; // null if we don't show first
+  final List<dynamic> middleCalls;
+  final dynamic lastCall;
+  final int groupId;
+
+  _ToolCallGroup({
+    this.firstCall,
+    required this.middleCalls,
+    required this.lastCall,
+    required this.groupId,
+  });
+}
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String chatId;
@@ -37,6 +52,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _didClearActiveChat = false;
   bool _isHeartbeatMode = false;
   Timer? _heartbeatTimer;
+  final Set<int> _expandedToolCallGroups = {};
 
   @override
   void initState() {
@@ -54,18 +70,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (ref.read(activeChatIdProvider) == widget.chatId) {
       ref.read(activeChatIdProvider.notifier).state = null;
       unawaited(ref.read(chatListProvider.notifier).markChatRead(widget.chatId));
-    }
-  }
-
-  void _scrollToBottom() {
-    if (_scrollController.hasClients) {
-      Future.delayed(const Duration(milliseconds: 100), () {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      });
     }
   }
 
@@ -95,12 +99,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final chatState = ref.watch(chatMessagesProvider(widget.chatId));
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    ref.listen(chatMessagesProvider(widget.chatId), (prev, next) {
-      if (prev?.messages.length != next.messages.length ||
-          prev?.streamingBubbles.length != next.streamingBubbles.length) {
-        _scrollToBottom();
-      }
-    });
 
     return PopScope(
       canPop: true,
@@ -152,7 +150,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   children: [
                     Text(
                       widget.botName,
-                      style: const TextStyle(fontSize: 16),
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     if (chatState.isBotTyping)
                       const Text(
@@ -178,9 +179,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
           IconButton(
-            icon: Icon(
-              Icons.monitor_heart,
-              color: _isHeartbeatMode ? AppTheme.tealGreen : null,
+            icon: HeartbeatIcon(
+              size: 22,
+              color: _isHeartbeatMode ? AppTheme.tealGreen : Colors.white,
             ),
             onPressed: _toggleHeartbeatMode,
             tooltip: 'Proactive Messages',
@@ -214,37 +215,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ? _buildProactiveView()
                 : chatState.isLoading && chatState.messages.isEmpty
                   ? const Center(child: CircularProgressIndicator())
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 8),
-                      itemCount: chatState.messages.length +
-                          (chatState.isBotTyping
-                              ? chatState.streamingBubbles.length
-                              : 0),
-                      itemBuilder: (context, index) {
-                        // Handle streaming bubbles
-                        if (index >= chatState.messages.length) {
-                          final bubbleIndex = index - chatState.messages.length;
-                          final bubble = chatState.streamingBubbles[bubbleIndex];
-                          return ChatBubble(
-                            content: bubble.content,
-                            isUser: false,
-                            timestamp: DateTime.now(),
-                            isStreaming: true,
-                            contentType: bubble.type == 'tool_call' ? 'tool_call' : 'text',
-                          );
-                        }
-                        final message = chatState.messages[index];
-                        return ChatBubble(
-                          content: message.content,
-                          isUser: message.role == 'user',
-                          timestamp: message.createdAt,
-                          contentType: message.contentType,
-                          attachmentUrl: message.attachmentUrl,
-                        );
-                      },
-                    ),
+                  : _buildChatView(chatState),
             ),
             if (!_isHeartbeatMode)
               MessageInput(
@@ -268,9 +239,174 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
+  Widget _buildChatView(ChatMessagesState chatState) {
+    // Group tool calls
+    final displayItems = _groupToolCalls(chatState);
+
+    return ListView.builder(
+      controller: _scrollController,
+      reverse: true,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      itemCount: displayItems.length,
+      itemBuilder: (context, index) {
+        final reversedIndex = displayItems.length - 1 - index;
+        final item = displayItems[reversedIndex];
+
+        if (item is _ToolCallGroup) {
+          return _buildToolCallGroup(item);
+        } else if (item is Message) {
+          return ChatBubble(
+            content: item.content,
+            isUser: item.role == 'user',
+            timestamp: item.createdAt,
+            contentType: item.contentType,
+            attachmentUrl: item.attachmentUrl,
+          );
+        } else if (item is MessageBubble) {
+          return ChatBubble(
+            content: item.content,
+            isUser: false,
+            timestamp: DateTime.now(),
+            isStreaming: true,
+            contentType: item.type == 'tool_call' ? 'tool_call' : 'text',
+          );
+        }
+        return const SizedBox.shrink();
+      },
+    );
+  }
+
+  List<dynamic> _groupToolCalls(ChatMessagesState chatState) {
+    final items = <dynamic>[];
+
+    // Add all messages first
+    items.addAll(chatState.messages);
+
+    // Add streaming bubbles
+    if (chatState.isBotTyping) {
+      items.addAll(chatState.streamingBubbles);
+    }
+
+    // Now group consecutive tool calls
+    final result = <dynamic>[];
+    var i = 0;
+
+    while (i < items.length) {
+      final item = items[i];
+
+      // Check if this is a tool call
+      final isToolCall = (item is Message && item.contentType == 'tool_call') ||
+                        (item is MessageBubble && item.type == 'tool_call');
+
+      if (!isToolCall) {
+        result.add(item);
+        i++;
+        continue;
+      }
+
+      // Find consecutive tool calls
+      final toolCallStart = i;
+      while (i < items.length) {
+        final current = items[i];
+        final isCurrentToolCall = (current is Message && current.contentType == 'tool_call') ||
+                                  (current is MessageBubble && current.type == 'tool_call');
+        if (!isCurrentToolCall) break;
+        i++;
+      }
+
+      final toolCallCount = i - toolCallStart;
+
+      // If more than 2 tool calls, create a group
+      if (toolCallCount > 2) {
+        final toolCalls = items.sublist(toolCallStart, i);
+        result.add(_ToolCallGroup(
+          firstCall: null,
+          middleCalls: toolCalls.sublist(0, toolCalls.length - 1),
+          lastCall: toolCalls.last,
+          groupId: toolCallStart,
+        ));
+      } else {
+        // Add them individually
+        result.addAll(items.sublist(toolCallStart, i));
+      }
+    }
+
+    return result;
+  }
+
+  Widget _buildToolCallGroup(_ToolCallGroup group) {
+    final isExpanded = _expandedToolCallGroups.contains(group.groupId);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // First tool call (only if not null)
+        if (group.firstCall != null)
+          _buildToolCallItem(group.firstCall),
+
+        // Middle calls (collapsed or expanded)
+        if (isExpanded)
+          ...group.middleCalls.map((call) => _buildToolCallItem(call))
+        else
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _expandedToolCallGroups.add(group.groupId);
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.only(left: 6, right: 48, top: 2, bottom: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.expand_more,
+                    size: 14,
+                    color: isDark ? Colors.grey.shade500 : Colors.grey.shade600,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${group.middleCalls.length} tool call${group.middleCalls.length > 1 ? 's' : ''}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                      color: isDark ? Colors.grey.shade500 : Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+        // Last tool call
+        _buildToolCallItem(group.lastCall),
+      ],
+    );
+  }
+
+  Widget _buildToolCallItem(dynamic item) {
+    if (item is Message) {
+      return ChatBubble(
+        content: item.content,
+        isUser: false,
+        timestamp: item.createdAt,
+        contentType: item.contentType,
+      );
+    } else if (item is MessageBubble) {
+      return ChatBubble(
+        content: item.content,
+        isUser: false,
+        timestamp: DateTime.now(),
+        isStreaming: true,
+        contentType: 'tool_call',
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
   Widget _buildProactiveView() {
     final lifecycleState = ref.watch(lifecycleMessagesProvider(widget.chatId));
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     if (lifecycleState.isLoading && lifecycleState.messages.isEmpty) {
       return const Center(child: CircularProgressIndicator());
@@ -282,77 +418,37 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
     }
 
+    // Filter to only show user-type messages (proactivity prompts, not main system prompt)
+    final filteredMessages = lifecycleState.messages.where((msg) {
+      // Only show user messages (proactivity prompts)
+      if (msg.role == 'user') return true;
+      // Show assistant text responses
+      if (msg.role == 'assistant' && msg.contentType == 'text') return true;
+      // Show tool calls and tool results
+      if (msg.contentType == 'tool_call' || msg.contentType == 'tool_result') return true;
+      return false;
+    }).toList();
+
     return ListView.builder(
       controller: _scrollController,
+      reverse: true,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      itemCount: lifecycleState.messages.length,
+      itemCount: filteredMessages.length,
       itemBuilder: (context, index) {
-        final message = lifecycleState.messages[index];
+        final reversedIndex = filteredMessages.length - 1 - index;
+        final message = filteredMessages[reversedIndex];
 
-        // Display user prompts as system prompts
-        final isSystemMessage = message.role == 'user' ||
-                                message.role == 'system' ||
-                                message.contentType == 'system_prompt';
-
-        if (isSystemMessage) {
-          return Container(
-            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.blue.withValues(alpha: 0.2)
-                  : Colors.blue.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: Colors.blue.withValues(alpha: 0.3),
-                width: 1,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.info_outline,
-                      size: 16,
-                      color: Colors.blue.shade700,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'System Prompt',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue.shade700,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      'Session ${message.sessionId}',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.blue.shade600,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  message.content,
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ],
-            ),
+        // User messages are system prompts - show as blue bubble on left
+        if (message.role == 'user') {
+          return ChatBubble(
+            content: message.content,
+            isUser: true,
+            timestamp: message.createdAt,
+            contentType: 'text',
           );
         }
 
-        // Tool result - format JSON nicely
-        if (message.contentType == 'tool_result') {
-          return _buildToolResultBubble(message, isDark);
-        }
-
-        // Tool call or regular assistant message
+        // Assistant messages and tool calls/results
         return ChatBubble(
           content: message.content,
           isUser: false,
@@ -360,75 +456,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           contentType: message.contentType,
         );
       },
-    );
-  }
-
-  Widget _buildToolResultBubble(dynamic message, bool isDark) {
-    String displayText = message.content;
-
-    try {
-      final parsed = json.decode(message.content);
-      if (parsed is Map) {
-        // Format JSON nicely
-        final buffer = StringBuffer();
-        parsed.forEach((key, value) {
-          if (key == 'success' || key == 'error') return;
-
-          if (value is List) {
-            buffer.writeln('$key:');
-            for (var item in value) {
-              if (item is Map) {
-                item.forEach((k, v) {
-                  buffer.writeln('  • $k: $v');
-                });
-              } else {
-                buffer.writeln('  • $item');
-              }
-            }
-          } else if (value is Map) {
-            buffer.writeln('$key:');
-            value.forEach((k, v) {
-              buffer.writeln('  • $k: $v');
-            });
-          } else {
-            buffer.writeln('$key: $value');
-          }
-        });
-
-        if (buffer.isNotEmpty) {
-          displayText = buffer.toString().trim();
-        } else if (parsed['success'] == true) {
-          displayText = '✓ Success';
-        } else if (parsed['error'] != null) {
-          displayText = '✗ Error: ${parsed['error']}';
-        }
-      }
-    } catch (e) {
-      // If parsing fails, use original content
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(left: 16, right: 48, top: 2, bottom: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            Icons.arrow_forward,
-            size: 14,
-            color: isDark ? Colors.green.shade400 : Colors.green.shade600,
-          ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              displayText,
-              style: TextStyle(
-                fontSize: 12,
-                color: isDark ? Colors.grey.shade400 : Colors.grey.shade700,
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 

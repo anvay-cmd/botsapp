@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -214,6 +214,65 @@ async def get_current_location(
         "speed": location.speed,
         "heading": location.heading,
         "timestamp": location.timestamp,
+    }
+
+
+@router.get("/location/history")
+async def get_location_history(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    start_date: date | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: date | None = Query(None, description="End date (YYYY-MM-DD)"),
+    limit: int = Query(1000, ge=1, le=5000, description="Maximum number of records"),
+):
+    """
+    Get user's location history.
+    If no dates provided, returns last 7 days.
+    """
+    # Default to last 7 days if no dates provided
+    if not start_date and not end_date:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=7)
+    elif not start_date:
+        start_date = end_date - timedelta(days=7)
+    elif not end_date:
+        end_date = date.today()
+
+    # Convert dates to datetime for comparison
+    start_datetime = datetime.combine(start_date, datetime.min.time())
+    end_datetime = datetime.combine(end_date, datetime.max.time())
+
+    # Query location history
+    result = await db.execute(
+        select(LocationTracking)
+        .where(
+            and_(
+                LocationTracking.user_id == user.id,
+                LocationTracking.timestamp >= start_datetime,
+                LocationTracking.timestamp <= end_datetime
+            )
+        )
+        .order_by(LocationTracking.timestamp)
+        .limit(limit)
+    )
+    locations = result.scalars().all()
+
+    return {
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "count": len(locations),
+        "locations": [
+            {
+                "latitude": loc.latitude,
+                "longitude": loc.longitude,
+                "accuracy": loc.accuracy,
+                "altitude": loc.altitude,
+                "speed": loc.speed,
+                "heading": loc.heading,
+                "timestamp": loc.timestamp.isoformat(),
+            }
+            for loc in locations
+        ]
     }
 
 

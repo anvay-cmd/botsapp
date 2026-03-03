@@ -58,6 +58,13 @@ class SettingsTab extends ConsumerWidget {
                   onTap: () {},
                 ),
                 _SettingsRow(
+                  icon: Icons.location_on_outlined,
+                  title: 'Location Tracks',
+                  subtitle: 'View location history on map',
+                  isDark: isDark,
+                  onTap: () => context.push('/location-tracks'),
+                ),
+                _SettingsRow(
                   icon: Icons.help_outline,
                   title: 'Help',
                   subtitle: 'FAQ, contact us',

@@ -12,6 +12,7 @@ import '../screens/call/call_screen.dart';
 import '../models/bot.dart';
 import '../screens/bot/create_bot_screen.dart';
 import '../screens/bot/edit_bot_screen.dart';
+import '../screens/location/location_tracks_screen.dart';
 
 final rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -88,6 +89,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           final bot = state.extra as Bot;
           return EditBotScreen(bot: bot);
         },
+      ),
+      GoRoute(
+        path: '/location-tracks',
+        builder: (context, state) => const LocationTracksScreen(),
       ),
     ],
   );

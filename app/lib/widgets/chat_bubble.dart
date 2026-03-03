@@ -8,7 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../config/constants.dart';
 import '../config/theme.dart';
 
-class ChatBubble extends StatelessWidget {
+class ChatBubble extends StatefulWidget {
   final String content;
   final bool isUser;
   final DateTime timestamp;
@@ -27,32 +27,53 @@ class ChatBubble extends StatelessWidget {
   });
 
   @override
+  State<ChatBubble> createState() => _ChatBubbleState();
+}
+
+class _ChatBubbleState extends State<ChatBubble> {
+  bool _isExpanded = false;
+  static const int _collapsedWordLimit = 50;
+
+  bool get _shouldCollapse {
+    final wordCount = widget.content.split(RegExp(r'\s+')).length;
+    return wordCount > _collapsedWordLimit;
+  }
+
+  String get _displayContent {
+    if (!_shouldCollapse || _isExpanded || widget.isUser) {
+      return widget.content;
+    }
+    final words = widget.content.split(RegExp(r'\s+'));
+    return '${words.take(_collapsedWordLimit).join(' ')}...';
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    if (contentType == 'voice_call') {
+    if (widget.contentType == 'voice_call') {
       return _VoiceCallBubble(
-        content: content,
-        isUser: isUser,
-        timestamp: timestamp,
+        content: widget.content,
+        isUser: widget.isUser,
+        timestamp: widget.timestamp,
         isDark: isDark,
       );
     }
 
-    if (contentType == 'tool_call') {
+    if (widget.contentType == 'tool_call') {
       return _ToolCallBubble(
-        content: content,
-        timestamp: timestamp,
+        content: widget.content,
+        timestamp: widget.timestamp,
         isDark: isDark,
-        isStreaming: isStreaming,
+        isStreaming: widget.isStreaming,
       );
     }
 
-    final bgColor = isUser
+    final bgColor = widget.isUser
         ? (isDark ? AppTheme.darkChatBubbleUser : AppTheme.chatBubbleUser)
         : (isDark ? AppTheme.darkChatBubbleBot : AppTheme.chatBubbleBot);
 
-    final timeStr = DateFormat('h:mm a').format(timestamp);
+    final timeStr = DateFormat('h:mm a').format(widget.timestamp);
 
     final timeWidget = Row(
       mainAxisSize: MainAxisSize.min,
@@ -61,16 +82,16 @@ class ChatBubble extends StatelessWidget {
           timeStr,
           style: TextStyle(
             fontSize: 10,
-            color: isUser
+            color: widget.isUser
                 ? Colors.white.withValues(alpha: 0.55)
                 : (isDark ? Colors.grey.shade500 : Colors.grey.shade500),
           ),
         ),
-        if (isUser) ...[
+        if (widget.isUser) ...[
           const SizedBox(width: 3),
           Icon(Icons.done_all, size: 13, color: Colors.white.withValues(alpha: 0.65)),
         ],
-        if (isStreaming) ...[
+        if (widget.isStreaming) ...[
           const SizedBox(width: 4),
           SizedBox(
             width: 9,
@@ -85,14 +106,14 @@ class ChatBubble extends StatelessWidget {
     );
 
     return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: widget.isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         constraints: BoxConstraints(
           maxWidth: MediaQuery.of(context).size.width * 0.78,
         ),
         margin: EdgeInsets.only(
-          left: isUser ? 48 : 6,
-          right: isUser ? 6 : 48,
+          left: widget.isUser ? 48 : 6,
+          right: widget.isUser ? 6 : 48,
           top: 1.5,
           bottom: 1.5,
         ),
@@ -101,8 +122,8 @@ class ChatBubble extends StatelessWidget {
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(10),
             topRight: const Radius.circular(10),
-            bottomLeft: isUser ? const Radius.circular(10) : const Radius.circular(3),
-            bottomRight: isUser ? const Radius.circular(3) : const Radius.circular(10),
+            bottomLeft: widget.isUser ? const Radius.circular(10) : const Radius.circular(3),
+            bottomRight: widget.isUser ? const Radius.circular(3) : const Radius.circular(10),
           ),
         ),
         child: Padding(
@@ -110,30 +131,30 @@ class ChatBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (contentType == 'image' && attachmentUrl != null) ...[
+              if (widget.contentType == 'image' && widget.attachmentUrl != null) ...[
                 ClipRRect(
                   borderRadius: BorderRadius.circular(6),
                   child: Image.network(
-                    attachmentUrl!.startsWith('http')
-                        ? attachmentUrl!
-                        : '${AppConstants.baseUrl}$attachmentUrl',
+                    widget.attachmentUrl!.startsWith('http')
+                        ? widget.attachmentUrl!
+                        : '${AppConstants.baseUrl}${widget.attachmentUrl}',
                     width: 220,
                     fit: BoxFit.cover,
                     errorBuilder: (_, _, _) =>
                         const Icon(Icons.broken_image, size: 48),
                   ),
                 ),
-                if (content.isNotEmpty) const SizedBox(height: 4),
+                if (widget.content.isNotEmpty) const SizedBox(height: 4),
               ],
-              if (content.isNotEmpty)
+              if (widget.content.isNotEmpty)
                 Stack(
                   children: [
                     Padding(
                       padding: const EdgeInsets.only(bottom: 0),
-                      child: isUser
+                      child: widget.isUser
                           ? RichText(
                               text: TextSpan(
-                                text: content,
+                                text: _displayContent,
                                 style: TextStyle(
                                   fontSize: 14.5,
                                   height: 1.25,
@@ -156,7 +177,7 @@ class ChatBubble extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 MarkdownBody(
-                                  data: content,
+                                  data: _displayContent,
                                   selectable: true,
                                   styleSheet: MarkdownStyleSheet(
                                     p: TextStyle(
@@ -201,6 +222,20 @@ class ChatBubble extends StatelessWidget {
                                 ),
                                 const SizedBox(height: 2),
                                 Opacity(opacity: 0, child: timeWidget),
+                                if (_shouldCollapse && !widget.isUser) ...[
+                                  const SizedBox(height: 4),
+                                  GestureDetector(
+                                    onTap: () => setState(() => _isExpanded = !_isExpanded),
+                                    child: Text(
+                                      _isExpanded ? 'Show less' : 'Show more',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: AppTheme.tealGreen,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                     ),
@@ -408,7 +443,7 @@ class _VoiceCallBubble extends StatelessWidget {
                   height: MediaQuery.of(context).size.height * 0.55,
                   child: ListView.separated(
                     itemCount: parsed.transcript.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 14),
+                    separatorBuilder: (_, _) => const SizedBox(height: 14),
                     itemBuilder: (context, index) {
                       final line = parsed.transcript[index];
                       final isUserLine = line.role == 'user';

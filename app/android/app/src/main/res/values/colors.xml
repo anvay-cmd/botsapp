@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App primary blue color -->
+    <color name="splash_background">#3872e9</color>
+</resources>

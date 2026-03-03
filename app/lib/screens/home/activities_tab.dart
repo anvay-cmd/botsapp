@@ -195,7 +195,7 @@ class _TwitterStyleTabs extends StatelessWidget {
       decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(
-            color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.grey.shade200,
+            color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.grey.shade100,
             width: 0.5,
           ),
         ),
